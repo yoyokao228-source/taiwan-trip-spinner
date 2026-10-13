@@ -12,19 +12,20 @@
   <!-- FontAwesome Icons -->
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
   <style>
-    #map { height: 380px; width: 100%; border-radius: 0.75rem; z-index: 1; }
+    #map { height: 400px; width: 100%; border-radius: 0.75rem; z-index: 1; }
     .custom-marker {
       background-color: #059669;
       color: white;
       font-weight: bold;
       border-radius: 50%;
-      width: 28px;
-      height: 28px;
+      width: 30px;
+      height: 30px;
       display: flex;
       align-items: center;
       justify-content: center;
       border: 2px solid white;
-      box-shadow: 0 2px 5px rgba(0,0,0,0.3);
+      box-shadow: 0 3px 6px rgba(0,0,0,0.3);
+      font-size: 14px;
     }
   </style>
 </head>
@@ -37,10 +38,10 @@
         <h1 class="text-2xl font-bold flex items-center gap-2">
           <i class="fa-solid fa-compass text-amber-300"></i> 台灣隨機行程決策器
         </h1>
-        <p class="text-emerald-100 text-sm mt-1">專屬一日遊隨機生成，解決選擇困難症！</p>
+        <p class="text-emerald-100 text-sm mt-1">專屬不重複景點與排隊美食一日遊生成器</p>
       </div>
       <span class="bg-emerald-700 text-emerald-100 text-xs px-3 py-1 rounded-full border border-emerald-500">
-        Vibe Coding 實作版
+        智能去重 · 完美時段匹配
       </span>
     </div>
   </header>
@@ -164,7 +165,6 @@
         </div>
 
         <div id="timelineContainer" class="space-y-4">
-          <!-- Dynamically populated cards -->
           <div class="text-center py-12 text-slate-400">
             <i class="fa-solid fa-map-location-dot text-4xl mb-3 block text-slate-300"></i>
             點擊左側「🎲 生成專屬行程」按鈕開始發想行程！
@@ -175,7 +175,7 @@
       <!-- Leaflet Map Container -->
       <div class="bg-white p-6 rounded-xl shadow-sm border border-slate-100">
         <h2 class="text-lg font-bold text-slate-900 border-b pb-3 mb-4 flex items-center gap-2">
-          <i class="fa-solid fa-map text-emerald-600"></i> 互動地圖路線
+          <i class="fa-solid fa-map text-emerald-600"></i> 互動地圖路線 (Esri 免費高畫質圖磚)
         </h2>
         <div id="map"></div>
       </div>
@@ -184,34 +184,54 @@
   </main>
 
   <script>
-    // --- 1. Administrative Divisions Data ---
+    // --- 1. 行政區資料 ---
     const taiwanData = {
-      "臺北市": ["全區", "中正區", "大安區", "信義區", "中山區", "士林區", "內湖區", "北投區"],
+      "台南市": ["全區", "永康區", "中西區", "安平區", "仁德區", "東區", "北區"],
+      "臺北市": ["全區", "中正區", "大安區", "信義區", "中山區", "士林區", "內湖區", "萬華區"],
       "新北市": ["全區", "板橋區", "淡水區", "新莊區", "三重區", "烏來區", "瑞芳區"],
       "台中市": ["全區", "西屯區", "北區", "南屯區", "豐原區", "和平區"],
-      "台南市": ["全區", "中西區", "安平區", "永康區", "東區", "北區"],
       "高雄市": ["全區", "新興區", "左營區", "鼓山區", "苓雅區", "三民區"],
-      "宜蘭縣": ["全區", "宜蘭市", "羅東鎮", "礁溪鄉", "頭城鎮"],
-      "花蓮縣": ["全區", "花蓮市", "吉安鄉", "新城鄉"],
-      "新竹市": ["全區", "東區", "北區"]
+      "宜蘭縣": ["全區", "宜蘭市", "羅東鎮", "礁溪鄉", "頭城鎮"]
     };
 
-    // --- 2. Preset Spots Database ---
+    // --- 2. 真實店家與景點資料庫 ---
     const spotsDatabase = [
-      // 台北
-      { id: 1, name: "鼎泰豐 (信義店)", city: "臺北市", district: "大安區", category: "美食放鬆", isIndoor: true, isGymFriendly: true, avgCost: 600, lat: 25.0334, lng: 121.5298, desc: "享譽國際的小籠包與高蛋白蒸餃體驗。" },
-      { id: 2, name: "象山親山步道", city: "臺北市", district: "信義區", category: "戶外自然", isIndoor: false, isGymFriendly: true, avgCost: 0, lat: 25.0273, lng: 121.5707, desc: "眺望 101 大樓絕佳視野，鍛鍊心肺的好去處。" },
-      { id: 3, name: "華山1914文創園區", city: "臺北市", district: "中正區", category: "文青靜態", isIndoor: true, isGymFriendly: false, avgCost: 250, lat: 25.0441, lng: 121.5294, desc: "豐富當期特展、獨立書店與特色咖啡廳。" },
-      { id: 4, name: "原岩攀岩館 (萬華店)", city: "臺北市", district: "萬華區", category: "運動休閒", isIndoor: true, isGymFriendly: true, avgCost: 450, lat: 25.0350, lng: 121.4980, desc: "室內抱石體驗，新手與老手皆宜。" },
-      // 台南
-      { id: 5, name: "文章牛肉湯", city: "台南市", district: "安平區", category: "美食放鬆", isIndoor: true, isGymFriendly: true, avgCost: 200, lat: 22.9996, lng: 120.1706, desc: "台南道地新鮮現沖溫體牛肉湯，優質高蛋白。" },
-      { id: 6, name: "奇美博物館", city: "台南市", district: "仁德區", category: "文青靜態", isIndoor: true, isGymFriendly: false, avgCost: 200, lat: 22.9347, lng: 120.2260, desc: "西洋藝術與西洋樂器珍藏的宏偉殿堂。" },
-      { id: 7, name: "神農街老宅漫步", city: "台南市", district: "中西區", category: "戶外自然", isIndoor: false, isGymFriendly: false, avgCost: 100, lat: 22.9975, lng: 120.1970, desc: "古色古香的燈籠老街與獨立文創小店。" },
-      // 台中
-      { id: 8, name: "木門咖啡 Wooden Door", city: "台中市", district: "南屯區", category: "美食放鬆", isIndoor: true, isGymFriendly: false, avgCost: 350, lat: 24.1505, lng: 120.6480, desc: "繽紛木門裝飾牆面，採光極佳的網美早午餐。" },
-      { id: 9, name: "國家歌劇院", city: "台中市", district: "西屯區", category: "文青靜態", isIndoor: true, isGymFriendly: false, avgCost: 0, lat: 24.1627, lng: 120.6405, desc: "伊東豊雄設計美學建築，涵蓋空中花園與展覽。" },
-      // 宜蘭
-      { id: 10, name: "礁溪溫泉公園", city: "宜蘭縣", district: "礁溪鄉", category: "戶外自然", isIndoor: false, isGymFriendly: false, avgCost: 0, lat: 24.8280, lng: 121.7750, desc: "免費泡腳池與日式庭園風呂放鬆之旅。" }
+      // 台南市 永康區
+      { id: 101, name: "永康彩繪眷村 (復興老兵文化園區)", city: "台南市", district: "永康區", category: "文青靜態", isIndoor: false, isGymFriendly: false, avgCost: 0, lat: 23.0041, lng: 120.2455, desc: "懷舊老街塗鴉牆與復古眷村巷弄慢步。" },
+      { id: 102, name: "永康探索教育公園", city: "台南市", district: "永康區", category: "戶外自然", isIndoor: false, isGymFriendly: true, avgCost: 0, lat: 23.0233, lng: 120.2589, desc: "綠意盎然的大型自然森林公園，晨間運動與散步首選。" },
+      { id: 103, name: "鴻品牛肉湯 (永康店)", city: "台南市", district: "永康區", category: "美食放鬆", isIndoor: true, isGymFriendly: true, avgCost: 220, lat: 23.0312, lng: 120.2510, desc: "在地老字號溫體牛肉湯，午餐補充高品質蛋白質。" },
+      { id: 104, name: "聯盈發港式點心", city: "台南市", district: "永康區", category: "美食放鬆", isIndoor: true, isGymFriendly: false, avgCost: 280, lat: 23.0245, lng: 120.2562, desc: "永康超人氣港點排隊名店，爆漿流沙包必點。" },
+      { id: 105, name: "碳佐麻里精品燒肉 (中華店)", city: "台南市", district: "永康區", category: "美食放鬆", isIndoor: true, isGymFriendly: true, avgCost: 950, lat: 23.0078, lng: 120.2312, desc: "燒肉界南霸天，造景氣派，適合晚餐精緻享用。" },
+      { id: 106, name: "三草日式拉麵", city: "台南市", district: "永康區", category: "美食放鬆", isIndoor: true, isGymFriendly: false, avgCost: 200, lat: 23.0385, lng: 120.2421, desc: "濃郁豚骨湯頭與厚切叉燒肉，在地人推薦拉麵。" },
+      { id: 107, name: "台南市立圖書館總館", city: "台南市", district: "永康區", category: "文青靜態", isIndoor: true, isGymFriendly: false, avgCost: 0, lat: 23.0289, lng: 120.2368, desc: "絕美金色天井設計，絕佳閱讀與文藝下午茶空間。" },
+
+      // 台南市 中西區 / 安平區 / 仁德區
+      { id: 108, name: "文章牛肉湯 (安平總店)", city: "台南市", district: "安平區", category: "美食放鬆", isIndoor: true, isGymFriendly: true, avgCost: 180, lat: 22.9996, lng: 120.1706, desc: "超狂人氣新鮮溫體牛肉湯，配牛肉燥飯必吃。" },
+      { id: 109, name: "奇美博物館", city: "台南市", district: "仁德區", category: "文青靜態", isIndoor: true, isGymFriendly: false, avgCost: 200, lat: 22.9347, lng: 120.2260, desc: "西洋藝術、西洋樂器與兵器珍藏的宏偉殿堂。" },
+      { id: 110, name: "林百貨 (五層樓仔)", city: "台南市", district: "中西區", category: "文青靜態", isIndoor: true, isGymFriendly: false, avgCost: 100, lat: 22.9918, lng: 120.2026, desc: "古蹟改建文創百貨，頂樓設有神社與二戰彈孔遺跡。" },
+      { id: 111, name: "神農街老宅散策", city: "台南市", district: "中西區", category: "戶外自然", isIndoor: false, isGymFriendly: false, avgCost: 0, lat: 22.9975, lng: 120.1970, desc: "古色古香的復古燈籠老街與獨立文創小店。" },
+
+      // 臺北市
+      { id: 1, name: "象山親山步道", city: "臺北市", district: "信義區", category: "戶外自然", isIndoor: false, isGymFriendly: true, avgCost: 0, lat: 25.0273, lng: 121.5707, desc: "俯瞰台北 101 全景與城市天際線的極佳早晨登山步道。" },
+      { id: 2, name: "阜杭豆漿", city: "臺北市", district: "中正區", category: "美食放鬆", isIndoor: true, isGymFriendly: true, avgCost: 120, lat: 25.0443, lng: 121.5248, desc: "華山市場排隊早餐名店，厚燒餅夾蛋與鹹豆漿。" },
+      { id: 3, name: "鼎泰豐 (信義本店)", city: "臺北市", district: "大安區", category: "美食放鬆", isIndoor: true, isGymFriendly: true, avgCost: 650, lat: 25.0334, lng: 121.5298, desc: "享譽國際的黃金 18 折小籠包與元氣雞湯。" },
+      { id: 4, name: "華山1914文創園區", city: "臺北市", district: "中正區", category: "文青靜態", isIndoor: true, isGymFriendly: false, avgCost: 250, lat: 25.0441, lng: 121.5294, desc: "酒廠歷史建築改建，豐富特展與風格選物店。" },
+      { id: 5, name: "原岩攀岩館 (萬華店)", city: "臺北市", district: "萬華區", category: "運動休閒", isIndoor: true, isGymFriendly: true, avgCost: 450, lat: 25.0350, lng: 121.4980, desc: "專業室內抱石牆面，新手與健身愛好者熱門點。" },
+
+      // 台中市
+      { id: 8, name: "草悟道綠園道散步", city: "台中市", district: "西屯區", category: "戶外自然", isIndoor: false, isGymFriendly: true, avgCost: 0, lat: 24.1512, lng: 120.6638, desc: "舒適宜人的都市綠洲，悠閒散步與假日市集。" },
+      { id: 9, name: "屋馬燒肉 (國美店)", city: "台中市", district: "西屯區", category: "美食放鬆", isIndoor: true, isGymFriendly: true, avgCost: 900, lat: 24.1505, lng: 120.6480, desc: "台中代表性燒肉，超濃郁雞湯與優質肉品。" },
+      { id: 10, name: "臺中國家歌劇院", city: "台中市", district: "西屯區", category: "文青靜態", isIndoor: true, isGymFriendly: false, avgCost: 0, lat: 24.1627, lng: 120.6405, desc: "伊東豊雄曲牆美學建築，設有空中花園與展演場。" }
+    ];
+
+    // 全台具體連鎖備份名店
+    const realChainFallbacks = [
+      { name: "路易莎咖啡 (職人烘焙門市)", cost: 110, category: "文青靜態", desc: "精品手沖咖啡、美味輕食與安靜舒適空間。" },
+      { name: "丹丹漢堡 (在地門市)", cost: 120, category: "美食放鬆", desc: "南台灣速食傳奇，麵線羹與鮮酥雞超值組合。" },
+      { name: "藏壽司 (迴轉壽司門市)", cost: 350, category: "美食放鬆", desc: "日式鮮美壽司，吃盤數還可以抽扭蛋樂趣滿分。" },
+      { name: "星巴克 (典藏門市)", cost: 180, category: "文青靜態", desc: "享用香醇咖啡與舒適質感的放術時光。" },
+      { name: "健身工廠 (動態體驗館)", cost: 300, category: "運動休閒", desc: "專業健身器材與心肺有氧，享受汗水揮灑。" },
+      { name: "摩斯漢堡 (門市)", cost: 160, category: "美食放鬆", desc: "經典燒肉藜麥米漢堡與招牌冰紅茶。" }
     ];
 
     // --- State Variables ---
@@ -236,7 +256,6 @@
       bindEvents();
     });
 
-    // Populate City Dropdown
     function initCitySelect() {
       citySelect.innerHTML = Object.keys(taiwanData).map(city => `<option value="${city}">${city}</option>`).join('');
       updateDistricts();
@@ -248,17 +267,14 @@
       districtSelect.innerHTML = districts.map(d => `<option value="${d}">${d}</option>`).join('');
     }
 
-    // Initialize Map with CartoDB Voyager tiles (Fixes OSM 403)
     function initMap() {
-      map = L.map('map').setView([23.8, 121.0], 7);
-      L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
-        attribution: '&copy; OpenStreetMap &copy; CARTO',
-        subdomains: 'abcd',
-        maxZoom: 19
+      map = L.map('map').setView([23.8, 120.9], 8);
+      L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}', {
+        attribution: 'Tiles &copy; Esri &mdash; Source: Esri, USGS',
+        maxZoom: 18
       }).addTo(map);
     }
 
-    // Event Bindings
     function bindEvents() {
       citySelect.addEventListener('change', updateDistricts);
       budgetSlider.addEventListener('input', (e) => budgetValue.textContent = `NT$ ${Number(e.target.value).toLocaleString()}`);
@@ -281,57 +297,93 @@
       generateBtn.addEventListener('click', generateItinerary);
     }
 
-    // --- Core Random Generation Logic ---
+    // --- Core Generate Itinerary Engine (With Deduplication) ---
     function generateItinerary() {
       const city = citySelect.value;
       const district = districtSelect.value;
-      const budget = Number(budgetSlider.value);
       const isRain = document.getElementById('toggleRain').checked;
       const isGym = document.getElementById('toggleGym').checked;
       const pace = Number(document.getElementById('paceSelect').value);
-      const dining = document.getElementById('diningStyle').value;
 
       const timeSlots5 = [
         { time: "09:00 - 10:30", label: "早晨探索", type: "景點" },
         { time: "11:30 - 13:00", label: "午餐時間", type: "美食" },
         { time: "14:00 - 16:30", label: "下午體驗", type: "景點" },
         { time: "18:00 - 19:30", label: "晚餐時間", type: "美食" },
-        { time: "20:00 - 21:30", label: "夜間微醺/散步", type: "景點" }
+        { time: "20:00 - 21:30", label: "夜間散步/小酌", type: "景點" }
       ];
 
       const timeSlots3 = [
-        { time: "11:30 - 13:00", label: "午餐享用", type: "美食" },
+        { time: "11:30 - 13:00", label: "午餐時間", type: "美食" },
         { time: "14:00 - 17:00", label: "下午精彩體驗", type: "景點" },
-        { time: "18:30 - 20:30", label: "晚餐約會", type: "美食" }
+        { time: "18:30 - 20:30", label: "晚餐時間", type: "美食" }
       ];
 
       const slots = pace === 5 ? timeSlots5 : timeSlots3;
-
       let newItinerary = [];
+      let usedNames = new Set(); // 防重複比對
+
+      // 鎖定項目優先放入
+      slots.forEach((slot, index) => {
+        if (currentItinerary[index] && currentItinerary[index].isLocked) {
+          usedNames.add(currentItinerary[index].name);
+        }
+      });
 
       slots.forEach((slot, index) => {
-        // Keep locked items
         if (currentItinerary[index] && currentItinerary[index].isLocked) {
           newItinerary.push(currentItinerary[index]);
           return;
         }
 
-        // Filter DB spots
+        // 1. 嚴格對應類別且未被使用
         let candidates = spotsDatabase.filter(s => {
+          if (usedNames.has(s.name)) return false;
           if (s.city !== city) return false;
           if (district !== "全區" && s.district !== district) return false;
           if (isRain && !s.isIndoor) return false;
           if (isGym && !s.isGymFriendly) return false;
+
+          if (slot.type === "景點" && s.category === "美食放鬆") return false;
+          if (slot.type === "美食" && s.category !== "美食放鬆") return false;
+
           return true;
         });
+
+        // 2. 備用層：全縣市不重複
+        if (candidates.length === 0) {
+          candidates = spotsDatabase.filter(s => {
+            if (usedNames.has(s.name)) return false;
+            if (s.city !== city) return false;
+            if (isRain && !s.isIndoor) return false;
+            return true;
+          });
+        }
 
         let chosen = null;
         if (candidates.length > 0) {
           chosen = candidates[Math.floor(Math.random() * candidates.length)];
         } else {
-          // Fallback Object Generator with realistic names
-          chosen = createFallbackSpot(city, district, slot, isGym, dining);
+          // 3. 連鎖真實品牌備案（去重）
+          const unusedChains = realChainFallbacks.filter(c => !usedNames.has(c.name));
+          const chainPool = unusedChains.length > 0 ? unusedChains : realChainFallbacks;
+          const randomChain = chainPool[Math.floor(Math.random() * chainPool.length)];
+
+          chosen = {
+            id: Date.now() + Math.random(),
+            name: `${randomChain.name}`,
+            city: city,
+            district: district === "全區" ? "市中心" : district,
+            category: slot.type === "美食" ? "美食放鬆" : "精選景點",
+            isIndoor: true,
+            avgCost: randomChain.cost,
+            lat: 22.99 + (Math.random() - 0.5) * 0.05,
+            lng: 120.21 + (Math.random() - 0.5) * 0.05,
+            desc: randomChain.desc
+          };
         }
+
+        usedNames.add(chosen.name);
 
         newItinerary.push({
           ...chosen,
@@ -343,53 +395,15 @@
       currentItinerary = newItinerary;
       renderTimeline();
       updateMapMarkers();
-      itineraryStatus.textContent = `已生成 ${city} (${district}) 行程`;
+      itineraryStatus.textContent = `已生成 ${city} (${district}) 專屬行程`;
     }
 
-    // Realistic Fallback Generator
-    function createFallbackSpot(city, district, slot, isGym, dining) {
-      const distText = district === "全區" ? "" : district;
-      let spotName = "";
-      let category = "美食放鬆";
-      let cost = 200;
-
-      if (slot.type === "美食") {
-        if (isGym) {
-          spotName = `${distText} 健人專屬高蛋白低GI餐盒`;
-          cost = 180;
-        } else if (dining === "精緻大餐") {
-          spotName = `${distText} 嚴選私廚無菜單料理`;
-          cost = 1200;
-        } else {
-          spotName = `${distText} 40年老字號排隊美食`;
-          cost = 150;
-        }
-      } else {
-        spotName = `${distText} 人氣文創打卡地標`;
-        category = "文青靜態";
-        cost = 100;
-      }
-
-      // Default Taiwan coordinates if not specified
-      return {
-        id: Date.now() + Math.random(),
-        name: spotName,
-        city: city,
-        district: district === "全區" ? "市中心" : district,
-        category: category,
-        isIndoor: true,
-        avgCost: cost,
-        lat: 23.9 + (Math.random() - 0.5) * 0.2,
-        lng: 120.9 + (Math.random() - 0.5) * 0.2,
-        desc: `為您實時推薦的 ${city}${distText} 熱門優質亮點。`
-      };
-    }
-
-    // --- Render Timeline Cards ---
+    // Render Cards
     function renderTimeline() {
       timelineContainer.innerHTML = currentItinerary.map((item, index) => {
-        const googleMapUrl = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(item.city + item.district + item.name)}`;
-        const searchUrl = `https://www.google.com/search?q=${encodeURIComponent(item.city + " " + item.name + " 門票 特展 活動")}`;
+        const queryTerm = `${item.city} ${item.district} ${item.name}`;
+        const googleMapUrl = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(queryTerm)}`;
+        const searchUrl = `https://www.google.com/search?q=${encodeURIComponent(queryTerm + " 營業時間 門票")}`;
 
         return `
           <div class="border border-slate-200 rounded-lg p-4 bg-slate-50/50 hover:bg-white hover:shadow-md transition relative">
@@ -431,27 +445,35 @@
       }).join('');
     }
 
-    // Toggle Lock
     window.toggleLock = function(index) {
       currentItinerary[index].isLocked = !currentItinerary[index].isLocked;
       renderTimeline();
     };
 
-    // Reroll Single Slot
     window.rerollSingle = function(index) {
       if (currentItinerary[index].isLocked) return;
-      
       const city = citySelect.value;
-      const district = districtSelect.value;
-      const isRain = document.getElementById('toggleRain').checked;
       
-      let candidates = spotsDatabase.filter(s => s.city === city && (district === "全區" || s.district === district) && (!isRain || s.isIndoor));
-      let newItem = candidates.length > 0 
-        ? candidates[Math.floor(Math.random() * candidates.length)]
-        : createFallbackSpot(city, district, currentItinerary[index].slotInfo, false, "氛圍特色");
+      let usedNames = new Set();
+      currentItinerary.forEach((item, i) => {
+        if (i !== index && item.name) usedNames.add(item.name);
+      });
+
+      let candidates = spotsDatabase.filter(s => s.city === city && !usedNames.has(s.name));
+      let newItem;
+      if (candidates.length > 0) {
+        newItem = candidates[Math.floor(Math.random() * candidates.length)];
+      } else {
+        const unusedChains = realChainFallbacks.filter(c => !usedNames.has(c.name));
+        const chainPool = unusedChains.length > 0 ? unusedChains : realChainFallbacks;
+        newItem = chainPool[Math.floor(Math.random() * chainPool.length)];
+      }
 
       currentItinerary[index] = {
         ...newItem,
+        city: city,
+        district: districtSelect.value === "全區" ? "市中心" : districtSelect.value,
+        avgCost: newItem.avgCost || 200,
         slotInfo: currentItinerary[index].slotInfo,
         isLocked: false
       };
@@ -460,11 +482,9 @@
       updateMapMarkers();
     };
 
-    // --- Map Marker Updating ---
     function updateMapMarkers() {
       mapMarkers.forEach(m => map.removeLayer(m));
       mapMarkers = [];
-
       let bounds = [];
 
       currentItinerary.forEach((spot, idx) => {
@@ -472,13 +492,13 @@
           const customIcon = L.divIcon({
             className: 'custom-div-icon',
             html: `<div class="custom-marker">${idx + 1}</div>`,
-            iconSize: [28, 28],
-            iconAnchor: [14, 14]
+            iconSize: [30, 30],
+            iconAnchor: [15, 15]
           });
 
           const marker = L.marker([spot.lat, spot.lng], { icon: customIcon })
             .addTo(map)
-            .bindPopup(`<b>${idx + 1}. ${spot.name}</b><br>${spot.slotInfo.label}`);
+            .bindPopup(`<b>${idx + 1}. ${spot.name}</b><br>${spot.city} ${spot.district}`);
           
           mapMarkers.push(marker);
           bounds.push([spot.lat, spot.lng]);
