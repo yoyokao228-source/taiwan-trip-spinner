@@ -1,0 +1,494 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>台灣隨機行程決策器 Taiwan Day-Trip Spinner</title>
+  <!-- Tailwind CSS CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- Leaflet CSS & JS -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <!-- FontAwesome Icons -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <style>
+    #map { height: 380px; width: 100%; border-radius: 0.75rem; z-index: 1; }
+    .custom-marker {
+      background-color: #059669;
+      color: white;
+      font-weight: bold;
+      border-radius: 50%;
+      width: 28px;
+      height: 28px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border: 2px solid white;
+      box-shadow: 0 2px 5px rgba(0,0,0,0.3);
+    }
+  </style>
+</head>
+<body class="bg-slate-50 text-slate-800 min-h-screen">
+
+  <!-- Header -->
+  <header class="bg-emerald-600 text-white shadow-md py-6">
+    <div class="max-w-6xl mx-auto px-4 flex flex-col md:flex-row justify-between items-center gap-2">
+      <div>
+        <h1 class="text-2xl font-bold flex items-center gap-2">
+          <i class="fa-solid fa-compass text-amber-300"></i> 台灣隨機行程決策器
+        </h1>
+        <p class="text-emerald-100 text-sm mt-1">專屬一日遊隨機生成，解決選擇困難症！</p>
+      </div>
+      <span class="bg-emerald-700 text-emerald-100 text-xs px-3 py-1 rounded-full border border-emerald-500">
+        Vibe Coding 實作版
+      </span>
+    </div>
+  </header>
+
+  <!-- Main Content -->
+  <main class="max-w-6xl mx-auto px-4 py-8 grid grid-cols-1 lg:grid-cols-12 gap-8">
+    
+    <!-- Left Panel: Form Controls -->
+    <section class="lg:col-span-5 bg-white p-6 rounded-xl shadow-sm border border-slate-100 space-y-6">
+      <h2 class="text-lg font-bold text-slate-900 border-b pb-3 flex items-center gap-2">
+        <i class="fa-solid fa-sliders text-emerald-600"></i> 行程偏好設定
+      </h2>
+
+      <!-- 1. 縣市與鄉鎮區連動 -->
+      <div class="grid grid-cols-2 gap-3">
+        <div>
+          <label class="block text-xs font-semibold text-slate-600 mb-1">選擇縣市</label>
+          <select id="citySelect" class="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-emerald-500 outline-none">
+          </select>
+        </div>
+        <div>
+          <label class="block text-xs font-semibold text-slate-600 mb-1">鄉鎮區域</label>
+          <select id="districtSelect" class="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-emerald-500 outline-none">
+            <option value="全區">全區 / 不限</option>
+          </select>
+        </div>
+      </div>
+
+      <!-- 2. 全天預算滑桿 -->
+      <div>
+        <div class="flex justify-between items-center mb-1">
+          <label class="text-xs font-semibold text-slate-600">全天預算上限 (每人)</label>
+          <span id="budgetValue" class="text-emerald-600 font-bold text-sm">NT$ 1,500</span>
+        </div>
+        <input type="range" id="budgetSlider" min="100" max="5000" step="100" value="1500" 
+          class="w-full h-2 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-emerald-600">
+      </div>
+
+      <!-- 3. 交通工具 -->
+      <div>
+        <label class="block text-xs font-semibold text-slate-600 mb-2">交通方式</label>
+        <div class="grid grid-cols-3 gap-2">
+          <label class="cursor-pointer border border-slate-200 p-2 rounded-lg text-center text-xs hover:bg-emerald-50 has-[:checked]:bg-emerald-50 has-[:checked]:border-emerald-500 has-[:checked]:text-emerald-700 font-medium">
+            <input type="radio" name="transport" value="機車" checked class="hidden"> 🛵 機車
+          </label>
+          <label class="cursor-pointer border border-slate-200 p-2 rounded-lg text-center text-xs hover:bg-emerald-50 has-[:checked]:bg-emerald-50 has-[:checked]:border-emerald-500 has-[:checked]:text-emerald-700 font-medium">
+            <input type="radio" name="transport" value="汽車" class="hidden"> 🚗 汽車
+          </label>
+          <label class="cursor-pointer border border-slate-200 p-2 rounded-lg text-center text-xs hover:bg-emerald-50 has-[:checked]:bg-emerald-50 has-[:checked]:border-emerald-500 has-[:checked]:text-emerald-700 font-medium">
+            <input type="radio" name="transport" value="大眾運輸/步行" class="hidden"> 🚌 大眾運輸
+          </label>
+        </div>
+      </div>
+
+      <!-- 4. 用餐體驗偏好 -->
+      <div>
+        <label class="block text-xs font-semibold text-slate-600 mb-2">🍽️ 用餐風格</label>
+        <select id="diningStyle" class="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-emerald-500 outline-none">
+          <option value="快速小吃">⚡ 快速便利 / 銅板小吃</option>
+          <option value="氛圍特色" selected>☕ 氛圍質感 / 特色餐廳</option>
+          <option value="精緻大餐">🍷 饕客嚴選 / 精緻大餐</option>
+        </select>
+      </div>
+
+      <!-- 5. 偏好類型標籤 (複選) -->
+      <div>
+        <label class="block text-xs font-semibold text-slate-600 mb-2">偏好類型 (可複選)</label>
+        <div class="flex flex-wrap gap-2" id="tagContainer">
+          <button type="button" data-tag="戶外自然" class="tag-btn text-xs px-3 py-1.5 rounded-full border border-slate-200 bg-slate-50 hover:bg-emerald-50 transition">🌲 戶外自然</button>
+          <button type="button" data-tag="文青靜態" class="tag-btn text-xs px-3 py-1.5 rounded-full border border-slate-200 bg-slate-50 hover:bg-emerald-50 transition">🎨 文青靜態</button>
+          <button type="button" data-tag="娛樂解謎" class="tag-btn text-xs px-3 py-1.5 rounded-full border border-slate-200 bg-slate-50 hover:bg-emerald-50 transition">🧩 娛樂解謎</button>
+          <button type="button" data-tag="運動休閒" class="tag-btn text-xs px-3 py-1.5 rounded-full border border-slate-200 bg-slate-50 hover:bg-emerald-50 transition">🏀 運動休閒</button>
+          <button type="button" data-tag="美食放鬆" class="tag-btn text-xs px-3 py-1.5 rounded-full border border-slate-200 bg-slate-50 hover:bg-emerald-50 transition">☕ 美食放鬆</button>
+        </div>
+      </div>
+
+      <!-- 6. 進階 4 大 Switch Toggles -->
+      <div class="border-t pt-4 space-y-3">
+        <label class="flex justify-between items-center text-xs text-slate-700 cursor-pointer">
+          <span>☔ 雨天備案（僅限純室內）</span>
+          <input type="checkbox" id="toggleRain" class="w-4 h-4 text-emerald-600 rounded focus:ring-emerald-500">
+        </label>
+        <label class="flex justify-between items-center text-xs text-slate-700 cursor-pointer">
+          <span>🏋️‍♂️ 健身咖模式（高蛋白餐/動態活動）</span>
+          <input type="checkbox" id="toggleGym" class="w-4 h-4 text-emerald-600 rounded focus:ring-emerald-500">
+        </label>
+        <div class="flex justify-between items-center text-xs text-slate-700">
+          <span>👥 出遊對象</span>
+          <select id="audienceSelect" class="bg-slate-50 border border-slate-200 text-xs p-1.5 rounded">
+            <option value="朋友揪團">朋友揪團</option>
+            <option value="情侶約會">情侶約會</option>
+            <option value="單人獨旅">單人獨旅</option>
+            <option value="親子同樂">親子同樂</option>
+          </select>
+        </div>
+        <div class="flex justify-between items-center text-xs text-slate-700">
+          <span>⏰ 行程步調</span>
+          <select id="paceSelect" class="bg-slate-50 border border-slate-200 text-xs p-1.5 rounded">
+            <option value="5">精實模式 (5時段)</option>
+            <option value="3">鬆散慢活 (3時段)</option>
+          </select>
+        </div>
+      </div>
+
+      <!-- Action Button -->
+      <button id="generateBtn" class="w-full py-3 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl shadow-md transition transform active:scale-95 flex justify-center items-center gap-2">
+        <i class="fa-solid fa-dice"></i> 🎲 生成專屬行程
+      </button>
+    </section>
+
+    <!-- Right Panel: Results & Map -->
+    <section class="lg:col-span-7 space-y-6">
+      
+      <!-- Results Timeline -->
+      <div class="bg-white p-6 rounded-xl shadow-sm border border-slate-100">
+        <div class="flex justify-between items-center border-b pb-3 mb-4">
+          <h2 class="text-lg font-bold text-slate-900 flex items-center gap-2">
+            <i class="fa-solid fa-calendar-day text-emerald-600"></i> 行程時間軸
+          </h2>
+          <span id="itineraryStatus" class="text-xs text-slate-500">尚未生成</span>
+        </div>
+
+        <div id="timelineContainer" class="space-y-4">
+          <!-- Dynamically populated cards -->
+          <div class="text-center py-12 text-slate-400">
+            <i class="fa-solid fa-map-location-dot text-4xl mb-3 block text-slate-300"></i>
+            點擊左側「🎲 生成專屬行程」按鈕開始發想行程！
+          </div>
+        </div>
+      </div>
+
+      <!-- Leaflet Map Container -->
+      <div class="bg-white p-6 rounded-xl shadow-sm border border-slate-100">
+        <h2 class="text-lg font-bold text-slate-900 border-b pb-3 mb-4 flex items-center gap-2">
+          <i class="fa-solid fa-map text-emerald-600"></i> 互動地圖路線
+        </h2>
+        <div id="map"></div>
+      </div>
+
+    </section>
+  </main>
+
+  <script>
+    // --- 1. Administrative Divisions Data ---
+    const taiwanData = {
+      "臺北市": ["全區", "中正區", "大安區", "信義區", "中山區", "士林區", "內湖區", "北投區"],
+      "新北市": ["全區", "板橋區", "淡水區", "新莊區", "三重區", "烏來區", "瑞芳區"],
+      "台中市": ["全區", "西屯區", "北區", "南屯區", "豐原區", "和平區"],
+      "台南市": ["全區", "中西區", "安平區", "永康區", "東區", "北區"],
+      "高雄市": ["全區", "新興區", "左營區", "鼓山區", "苓雅區", "三民區"],
+      "宜蘭縣": ["全區", "宜蘭市", "羅東鎮", "礁溪鄉", "頭城鎮"],
+      "花蓮縣": ["全區", "花蓮市", "吉安鄉", "新城鄉"],
+      "新竹市": ["全區", "東區", "北區"]
+    };
+
+    // --- 2. Preset Spots Database ---
+    const spotsDatabase = [
+      // 台北
+      { id: 1, name: "鼎泰豐 (信義店)", city: "臺北市", district: "大安區", category: "美食放鬆", isIndoor: true, isGymFriendly: true, avgCost: 600, lat: 25.0334, lng: 121.5298, desc: "享譽國際的小籠包與高蛋白蒸餃體驗。" },
+      { id: 2, name: "象山親山步道", city: "臺北市", district: "信義區", category: "戶外自然", isIndoor: false, isGymFriendly: true, avgCost: 0, lat: 25.0273, lng: 121.5707, desc: "眺望 101 大樓絕佳視野，鍛鍊心肺的好去處。" },
+      { id: 3, name: "華山1914文創園區", city: "臺北市", district: "中正區", category: "文青靜態", isIndoor: true, isGymFriendly: false, avgCost: 250, lat: 25.0441, lng: 121.5294, desc: "豐富當期特展、獨立書店與特色咖啡廳。" },
+      { id: 4, name: "原岩攀岩館 (萬華店)", city: "臺北市", district: "萬華區", category: "運動休閒", isIndoor: true, isGymFriendly: true, avgCost: 450, lat: 25.0350, lng: 121.4980, desc: "室內抱石體驗，新手與老手皆宜。" },
+      // 台南
+      { id: 5, name: "文章牛肉湯", city: "台南市", district: "安平區", category: "美食放鬆", isIndoor: true, isGymFriendly: true, avgCost: 200, lat: 22.9996, lng: 120.1706, desc: "台南道地新鮮現沖溫體牛肉湯，優質高蛋白。" },
+      { id: 6, name: "奇美博物館", city: "台南市", district: "仁德區", category: "文青靜態", isIndoor: true, isGymFriendly: false, avgCost: 200, lat: 22.9347, lng: 120.2260, desc: "西洋藝術與西洋樂器珍藏的宏偉殿堂。" },
+      { id: 7, name: "神農街老宅漫步", city: "台南市", district: "中西區", category: "戶外自然", isIndoor: false, isGymFriendly: false, avgCost: 100, lat: 22.9975, lng: 120.1970, desc: "古色古香的燈籠老街與獨立文創小店。" },
+      // 台中
+      { id: 8, name: "木門咖啡 Wooden Door", city: "台中市", district: "南屯區", category: "美食放鬆", isIndoor: true, isGymFriendly: false, avgCost: 350, lat: 24.1505, lng: 120.6480, desc: "繽紛木門裝飾牆面，採光極佳的網美早午餐。" },
+      { id: 9, name: "國家歌劇院", city: "台中市", district: "西屯區", category: "文青靜態", isIndoor: true, isGymFriendly: false, avgCost: 0, lat: 24.1627, lng: 120.6405, desc: "伊東豊雄設計美學建築，涵蓋空中花園與展覽。" },
+      // 宜蘭
+      { id: 10, name: "礁溪溫泉公園", city: "宜蘭縣", district: "礁溪鄉", category: "戶外自然", isIndoor: false, isGymFriendly: false, avgCost: 0, lat: 24.8280, lng: 121.7750, desc: "免費泡腳池與日式庭園風呂放鬆之旅。" }
+    ];
+
+    // --- State Variables ---
+    let selectedTags = new Set();
+    let currentItinerary = [];
+    let map = null;
+    let mapMarkers = [];
+
+    // --- DOM Elements ---
+    const citySelect = document.getElementById('citySelect');
+    const districtSelect = document.getElementById('districtSelect');
+    const budgetSlider = document.getElementById('budgetSlider');
+    const budgetValue = document.getElementById('budgetValue');
+    const generateBtn = document.getElementById('generateBtn');
+    const timelineContainer = document.getElementById('timelineContainer');
+    const itineraryStatus = document.getElementById('itineraryStatus');
+
+    // Initialize Page
+    document.addEventListener('DOMContentLoaded', () => {
+      initCitySelect();
+      initMap();
+      bindEvents();
+    });
+
+    // Populate City Dropdown
+    function initCitySelect() {
+      citySelect.innerHTML = Object.keys(taiwanData).map(city => `<option value="${city}">${city}</option>`).join('');
+      updateDistricts();
+    }
+
+    function updateDistricts() {
+      const city = citySelect.value;
+      const districts = taiwanData[city] || ["全區"];
+      districtSelect.innerHTML = districts.map(d => `<option value="${d}">${d}</option>`).join('');
+    }
+
+    // Initialize Map with CartoDB Voyager tiles (Fixes OSM 403)
+    function initMap() {
+      map = L.map('map').setView([23.8, 121.0], 7);
+      L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
+        attribution: '&copy; OpenStreetMap &copy; CARTO',
+        subdomains: 'abcd',
+        maxZoom: 19
+      }).addTo(map);
+    }
+
+    // Event Bindings
+    function bindEvents() {
+      citySelect.addEventListener('change', updateDistricts);
+      budgetSlider.addEventListener('input', (e) => budgetValue.textContent = `NT$ ${Number(e.target.value).toLocaleString()}`);
+      
+      document.getElementById('tagContainer').addEventListener('click', (e) => {
+        if (e.target.classList.contains('tag-btn')) {
+          const tag = e.target.dataset.tag;
+          if (selectedTags.has(tag)) {
+            selectedTags.delete(tag);
+            e.target.classList.remove('bg-emerald-600', 'text-white');
+            e.target.classList.add('bg-slate-50');
+          } else {
+            selectedTags.add(tag);
+            e.target.classList.add('bg-emerald-600', 'text-white');
+            e.target.classList.remove('bg-slate-50');
+          }
+        }
+      });
+
+      generateBtn.addEventListener('click', generateItinerary);
+    }
+
+    // --- Core Random Generation Logic ---
+    function generateItinerary() {
+      const city = citySelect.value;
+      const district = districtSelect.value;
+      const budget = Number(budgetSlider.value);
+      const isRain = document.getElementById('toggleRain').checked;
+      const isGym = document.getElementById('toggleGym').checked;
+      const pace = Number(document.getElementById('paceSelect').value);
+      const dining = document.getElementById('diningStyle').value;
+
+      const timeSlots5 = [
+        { time: "09:00 - 10:30", label: "早晨探索", type: "景點" },
+        { time: "11:30 - 13:00", label: "午餐時間", type: "美食" },
+        { time: "14:00 - 16:30", label: "下午體驗", type: "景點" },
+        { time: "18:00 - 19:30", label: "晚餐時間", type: "美食" },
+        { time: "20:00 - 21:30", label: "夜間微醺/散步", type: "景點" }
+      ];
+
+      const timeSlots3 = [
+        { time: "11:30 - 13:00", label: "午餐享用", type: "美食" },
+        { time: "14:00 - 17:00", label: "下午精彩體驗", type: "景點" },
+        { time: "18:30 - 20:30", label: "晚餐約會", type: "美食" }
+      ];
+
+      const slots = pace === 5 ? timeSlots5 : timeSlots3;
+
+      let newItinerary = [];
+
+      slots.forEach((slot, index) => {
+        // Keep locked items
+        if (currentItinerary[index] && currentItinerary[index].isLocked) {
+          newItinerary.push(currentItinerary[index]);
+          return;
+        }
+
+        // Filter DB spots
+        let candidates = spotsDatabase.filter(s => {
+          if (s.city !== city) return false;
+          if (district !== "全區" && s.district !== district) return false;
+          if (isRain && !s.isIndoor) return false;
+          if (isGym && !s.isGymFriendly) return false;
+          return true;
+        });
+
+        let chosen = null;
+        if (candidates.length > 0) {
+          chosen = candidates[Math.floor(Math.random() * candidates.length)];
+        } else {
+          // Fallback Object Generator with realistic names
+          chosen = createFallbackSpot(city, district, slot, isGym, dining);
+        }
+
+        newItinerary.push({
+          ...chosen,
+          slotInfo: slot,
+          isLocked: false
+        });
+      });
+
+      currentItinerary = newItinerary;
+      renderTimeline();
+      updateMapMarkers();
+      itineraryStatus.textContent = `已生成 ${city} (${district}) 行程`;
+    }
+
+    // Realistic Fallback Generator
+    function createFallbackSpot(city, district, slot, isGym, dining) {
+      const distText = district === "全區" ? "" : district;
+      let spotName = "";
+      let category = "美食放鬆";
+      let cost = 200;
+
+      if (slot.type === "美食") {
+        if (isGym) {
+          spotName = `${distText} 健人專屬高蛋白低GI餐盒`;
+          cost = 180;
+        } else if (dining === "精緻大餐") {
+          spotName = `${distText} 嚴選私廚無菜單料理`;
+          cost = 1200;
+        } else {
+          spotName = `${distText} 40年老字號排隊美食`;
+          cost = 150;
+        }
+      } else {
+        spotName = `${distText} 人氣文創打卡地標`;
+        category = "文青靜態";
+        cost = 100;
+      }
+
+      // Default Taiwan coordinates if not specified
+      return {
+        id: Date.now() + Math.random(),
+        name: spotName,
+        city: city,
+        district: district === "全區" ? "市中心" : district,
+        category: category,
+        isIndoor: true,
+        avgCost: cost,
+        lat: 23.9 + (Math.random() - 0.5) * 0.2,
+        lng: 120.9 + (Math.random() - 0.5) * 0.2,
+        desc: `為您實時推薦的 ${city}${distText} 熱門優質亮點。`
+      };
+    }
+
+    // --- Render Timeline Cards ---
+    function renderTimeline() {
+      timelineContainer.innerHTML = currentItinerary.map((item, index) => {
+        const googleMapUrl = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(item.city + item.district + item.name)}`;
+        const searchUrl = `https://www.google.com/search?q=${encodeURIComponent(item.city + " " + item.name + " 門票 特展 活動")}`;
+
+        return `
+          <div class="border border-slate-200 rounded-lg p-4 bg-slate-50/50 hover:bg-white hover:shadow-md transition relative">
+            <div class="flex items-center justify-between mb-2">
+              <div class="flex items-center gap-2">
+                <span class="w-6 h-6 rounded-full bg-emerald-600 text-white font-bold text-xs flex items-center justify-center">
+                  ${index + 1}
+                </span>
+                <span class="text-xs font-semibold text-emerald-800 bg-emerald-100 px-2 py-0.5 rounded">
+                  ${item.slotInfo.time} · ${item.slotInfo.label}
+                </span>
+              </div>
+              <span class="text-xs text-slate-400"><i class="fa-solid fa-location-dot"></i> ${item.city} ${item.district}</span>
+            </div>
+
+            <h3 class="font-bold text-slate-900 text-base mb-1">${item.name}</h3>
+            <p class="text-xs text-slate-600 mb-3">${item.desc}</p>
+
+            <div class="flex flex-wrap items-center justify-between gap-2 border-t border-slate-200 pt-3 text-xs">
+              <span class="font-medium text-slate-700">預估費用: <strong class="text-emerald-600">約 NT$ ${item.avgCost}</strong></span>
+              
+              <div class="flex items-center gap-2">
+                <button onclick="toggleLock(${index})" class="px-2.5 py-1 rounded border text-xs font-medium transition ${item.isLocked ? 'bg-amber-100 border-amber-300 text-amber-800' : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-100'}">
+                  ${item.isLocked ? '<i class="fa-solid fa-lock"></i> 已鎖定' : '<i class="fa-solid fa-lock-open"></i> 鎖定'}
+                </button>
+                <button onclick="rerollSingle(${index})" class="px-2.5 py-1 bg-white border border-slate-200 text-slate-600 rounded text-xs font-medium hover:bg-slate-100">
+                  <i class="fa-solid fa-rotate"></i> 重抽
+                </button>
+                <a href="${googleMapUrl}" target="_blank" class="px-2.5 py-1 bg-blue-50 border border-blue-200 text-blue-700 rounded text-xs font-medium hover:bg-blue-100">
+                  <i class="fa-solid fa-map-pin"></i> Google 地圖
+                </a>
+                <a href="${searchUrl}" target="_blank" class="px-2.5 py-1 bg-slate-100 text-slate-700 rounded text-xs font-medium hover:bg-slate-200">
+                  <i class="fa-solid fa-magnifying-glass"></i> 查活動
+                </a>
+              </div>
+            </div>
+          </div>
+        `;
+      }).join('');
+    }
+
+    // Toggle Lock
+    window.toggleLock = function(index) {
+      currentItinerary[index].isLocked = !currentItinerary[index].isLocked;
+      renderTimeline();
+    };
+
+    // Reroll Single Slot
+    window.rerollSingle = function(index) {
+      if (currentItinerary[index].isLocked) return;
+      
+      const city = citySelect.value;
+      const district = districtSelect.value;
+      const isRain = document.getElementById('toggleRain').checked;
+      
+      let candidates = spotsDatabase.filter(s => s.city === city && (district === "全區" || s.district === district) && (!isRain || s.isIndoor));
+      let newItem = candidates.length > 0 
+        ? candidates[Math.floor(Math.random() * candidates.length)]
+        : createFallbackSpot(city, district, currentItinerary[index].slotInfo, false, "氛圍特色");
+
+      currentItinerary[index] = {
+        ...newItem,
+        slotInfo: currentItinerary[index].slotInfo,
+        isLocked: false
+      };
+
+      renderTimeline();
+      updateMapMarkers();
+    };
+
+    // --- Map Marker Updating ---
+    function updateMapMarkers() {
+      mapMarkers.forEach(m => map.removeLayer(m));
+      mapMarkers = [];
+
+      let bounds = [];
+
+      currentItinerary.forEach((spot, idx) => {
+        if (spot.lat && spot.lng) {
+          const customIcon = L.divIcon({
+            className: 'custom-div-icon',
+            html: `<div class="custom-marker">${idx + 1}</div>`,
+            iconSize: [28, 28],
+            iconAnchor: [14, 14]
+          });
+
+          const marker = L.marker([spot.lat, spot.lng], { icon: customIcon })
+            .addTo(map)
+            .bindPopup(`<b>${idx + 1}. ${spot.name}</b><br>${spot.slotInfo.label}`);
+          
+          mapMarkers.push(marker);
+          bounds.push([spot.lat, spot.lng]);
+        }
+      });
+
+      if (bounds.length > 0) {
+        map.fitBounds(bounds, { padding: [50, 50] });
+      }
+    }
+  </script>
+</body>
+</html>
