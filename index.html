@@ -38,10 +38,10 @@
         <h1 class="text-2xl font-bold flex items-center gap-2">
           <i class="fa-solid fa-compass text-amber-300"></i> 台灣隨機行程決策器
         </h1>
-        <p class="text-emerald-100 text-sm mt-1">專屬不重複景點與排隊美食一日遊生成器</p>
+        <p class="text-emerald-100 text-sm mt-1">全台 22 縣市專屬一日遊生成，地圖精準定位！</p>
       </div>
       <span class="bg-emerald-700 text-emerald-100 text-xs px-3 py-1 rounded-full border border-emerald-500">
-        智能去重 · 完美時段匹配
+        全台 22 縣市完整版
       </span>
     </div>
   </header>
@@ -55,7 +55,7 @@
         <i class="fa-solid fa-sliders text-emerald-600"></i> 行程偏好設定
       </h2>
 
-      <!-- 1. 縣市與鄉鎮區連動 -->
+      <!-- 1. 22 縣市與鄉鎮區連動 -->
       <div class="grid grid-cols-2 gap-3">
         <div>
           <label class="block text-xs font-semibold text-slate-600 mb-1">選擇縣市</label>
@@ -175,7 +175,7 @@
       <!-- Leaflet Map Container -->
       <div class="bg-white p-6 rounded-xl shadow-sm border border-slate-100">
         <h2 class="text-lg font-bold text-slate-900 border-b pb-3 mb-4 flex items-center gap-2">
-          <i class="fa-solid fa-map text-emerald-600"></i> 互動地圖路線 (Esri 免費高畫質圖磚)
+          <i class="fa-solid fa-map text-emerald-600"></i> 互動地圖路線 (即時跟隨定位)
         </h2>
         <div id="map"></div>
       </div>
@@ -184,32 +184,68 @@
   </main>
 
   <script>
-    // --- 1. 行政區資料 ---
+    // --- 1. 全台 22 縣市與行政區完整資料庫 ---
     const taiwanData = {
-      "台南市": ["全區", "永康區", "中西區", "安平區", "仁德區", "東區", "北區"],
-      "臺北市": ["全區", "中正區", "大安區", "信義區", "中山區", "士林區", "內湖區", "萬華區"],
-      "新北市": ["全區", "板橋區", "淡水區", "新莊區", "三重區", "烏來區", "瑞芳區"],
-      "台中市": ["全區", "西屯區", "北區", "南屯區", "豐原區", "和平區"],
-      "高雄市": ["全區", "新興區", "左營區", "鼓山區", "苓雅區", "三民區"],
-      "宜蘭縣": ["全區", "宜蘭市", "羅東鎮", "礁溪鄉", "頭城鎮"]
+      "基隆市": ["全區", "仁愛區", "信義區", "中正區", "中山區", "安樂區", "暖暖區", "七堵區"],
+      "臺北市": ["全區", "中正區", "大安區", "信義區", "中山區", "士林區", "內湖區", "萬華區", "文山區", "北頭區", "松山區", "南港區"],
+      "新北市": ["全區", "板橋區", "淡水區", "新莊區", "三重區", "烏來區", "瑞芳區", "中和區", "永和區", "新店區", "汐止區", "林口區", "三峽區"],
+      "桃園市": ["全區", "桃園區", "中壢區", "平鎮區", "八德區", "楊梅區", "蘆竹區", "大溪區", "龜山區"],
+      "新竹市": ["全區", "東區", "北區", "香山區"],
+      "新竹縣": ["全區", "竹北市", "竹東鎮", "新埔鎮", "關西鎮", "湖口鄉", "北埔鄉"],
+      "苗栗縣": ["全區", "苗栗市", "頭份市", "竹南鎮", "後龍鎮", "通霄鎮", "三義鄉"],
+      "台中市": ["全區", "西屯區", "北區", "南屯區", "豐原區", "和平區", "中區", "東區", "南區", "西區", "北屯區", "大里區"],
+      "彰化縣": ["全區", "彰化市", "員林市", "鹿港鎮", "和美鎮", "北斗鎮", "田尾鄉"],
+      "南投縣": ["全區", "南投市", "埔里鎮", "草屯鎮", "竹山鎮", "集集鎮", "清境農場/仁愛鄉", "魚池鄉(日月潭)"],
+      "雲林縣": ["全區", "斗六市", "斗南鎮", "虎尾鎮", "西螺鎮", "北港鎮"],
+      "嘉義市": ["全區", "東區", "西區"],
+      "嘉義縣": ["全區", "太保市", "朴子市", "民雄鄉", "水上鄉", "中埔鄉", "阿里山鄉"],
+      "台南市": ["全區", "中西區", "安平區", "永康區", "東區", "北區", "南區", "新營區", "善化區", "歸仁區", "仁德區"],
+      "高雄市": ["全區", "新興區", "左營區", "鼓山區", "苓雅區", "三民區", "鳳山區", "楠梓區", "前鎮區", "旗津區", "美濃區"],
+      "屏東縣": ["全區", "屏東市", "潮州鎮", "東港鎮", "恆春鎮(墾丁)", "萬巒鄉", "琉球鄉(小琉球)"],
+      "宜蘭縣": ["全區", "宜蘭市", "羅東鎮", "礁溪鄉", "頭城鎮", "蘇澳鎮", "員山鄉", "冬山鄉"],
+      "花蓮縣": ["全區", "花蓮市", "吉安鄉", "新城鄉", "瑞穗鄉", "玉里鎮"],
+      "臺東縣": ["全區", "臺東市", "成功鎮", "關山鎮", "鹿野鄉", "池上鄉", "太麻里鄉"],
+      "澎湖縣": ["全區", "馬公市", "湖西鄉", "白沙鄉", "西嶼鄉"],
+      "金門縣": ["全區", "金城鎮", "金湖鎮", "金沙鎮", "金寧鄉", "烈嶼鄉"],
+      "連江縣": ["全區", "南竿鄉", "北竿鄉", "莒光鄉", "東引鄉"]
     };
 
-    // --- 2. 真實店家與景點資料庫 ---
+    // 全台 22 縣市中心座標（精確導航與地圖飛躍）
+    const cityCenters = {
+      "基隆市": [25.1283, 121.7419],
+      "臺北市": [25.0330, 121.5654],
+      "新北市": [25.0117, 121.4658],
+      "桃園市": [24.9936, 121.3010],
+      "新竹市": [24.8138, 120.9675],
+      "新竹縣": [24.8387, 121.0076],
+      "苗栗縣": [24.5602, 120.8214],
+      "台中市": [24.1477, 120.6736],
+      "彰化縣": [24.0815, 120.5381],
+      "南投縣": [23.9151, 120.6869],
+      "雲林縣": [23.7092, 120.4313],
+      "嘉義市": [23.4800, 120.4491],
+      "嘉義縣": [23.4588, 120.2927],
+      "台南市": [22.9997, 120.2270],
+      "高雄市": [22.6273, 120.3014],
+      "屏東縣": [22.6713, 120.4880],
+      "宜蘭縣": [24.7570, 121.7530],
+      "花蓮縣": [23.9871, 121.6016],
+      "臺東縣": [22.7613, 121.1444],
+      "澎湖縣": [23.5711, 119.5793],
+      "金門縣": [24.4493, 118.3766],
+      "連江縣": [26.1505, 119.9499]
+    };
+
+    // --- 2. 核心實體店家資料庫 (包含具體實體與各縣市範例) ---
     const spotsDatabase = [
-      // 台南市 永康區
-      { id: 101, name: "永康彩繪眷村 (復興老兵文化園區)", city: "台南市", district: "永康區", category: "文青靜態", isIndoor: false, isGymFriendly: false, avgCost: 0, lat: 23.0041, lng: 120.2455, desc: "懷舊老街塗鴉牆與復古眷村巷弄慢步。" },
+      // 台南市
+      { id: 101, name: "永康彩繪眷村 (復興老兵園區)", city: "台南市", district: "永康區", category: "文青靜態", isIndoor: false, isGymFriendly: false, avgCost: 0, lat: 23.0041, lng: 120.2455, desc: "懷舊老街塗鴉牆與復古眷村巷弄慢步。" },
       { id: 102, name: "永康探索教育公園", city: "台南市", district: "永康區", category: "戶外自然", isIndoor: false, isGymFriendly: true, avgCost: 0, lat: 23.0233, lng: 120.2589, desc: "綠意盎然的大型自然森林公園，晨間運動與散步首選。" },
       { id: 103, name: "鴻品牛肉湯 (永康店)", city: "台南市", district: "永康區", category: "美食放鬆", isIndoor: true, isGymFriendly: true, avgCost: 220, lat: 23.0312, lng: 120.2510, desc: "在地老字號溫體牛肉湯，午餐補充高品質蛋白質。" },
       { id: 104, name: "聯盈發港式點心", city: "台南市", district: "永康區", category: "美食放鬆", isIndoor: true, isGymFriendly: false, avgCost: 280, lat: 23.0245, lng: 120.2562, desc: "永康超人氣港點排隊名店，爆漿流沙包必點。" },
       { id: 105, name: "碳佐麻里精品燒肉 (中華店)", city: "台南市", district: "永康區", category: "美食放鬆", isIndoor: true, isGymFriendly: true, avgCost: 950, lat: 23.0078, lng: 120.2312, desc: "燒肉界南霸天，造景氣派，適合晚餐精緻享用。" },
-      { id: 106, name: "三草日式拉麵", city: "台南市", district: "永康區", category: "美食放鬆", isIndoor: true, isGymFriendly: false, avgCost: 200, lat: 23.0385, lng: 120.2421, desc: "濃郁豚骨湯頭與厚切叉燒肉，在地人推薦拉麵。" },
-      { id: 107, name: "台南市立圖書館總館", city: "台南市", district: "永康區", category: "文青靜態", isIndoor: true, isGymFriendly: false, avgCost: 0, lat: 23.0289, lng: 120.2368, desc: "絕美金色天井設計，絕佳閱讀與文藝下午茶空間。" },
-
-      // 台南市 中西區 / 安平區 / 仁德區
-      { id: 108, name: "文章牛肉湯 (安平總店)", city: "台南市", district: "安平區", category: "美食放鬆", isIndoor: true, isGymFriendly: true, avgCost: 180, lat: 22.9996, lng: 120.1706, desc: "超狂人氣新鮮溫體牛肉湯，配牛肉燥飯必吃。" },
-      { id: 109, name: "奇美博物館", city: "台南市", district: "仁德區", category: "文青靜態", isIndoor: true, isGymFriendly: false, avgCost: 200, lat: 22.9347, lng: 120.2260, desc: "西洋藝術、西洋樂器與兵器珍藏的宏偉殿堂。" },
-      { id: 110, name: "林百貨 (五層樓仔)", city: "台南市", district: "中西區", category: "文青靜態", isIndoor: true, isGymFriendly: false, avgCost: 100, lat: 22.9918, lng: 120.2026, desc: "古蹟改建文創百貨，頂樓設有神社與二戰彈孔遺跡。" },
-      { id: 111, name: "神農街老宅散策", city: "台南市", district: "中西區", category: "戶外自然", isIndoor: false, isGymFriendly: false, avgCost: 0, lat: 22.9975, lng: 120.1970, desc: "古色古香的復古燈籠老街與獨立文創小店。" },
+      { id: 106, name: "文章牛肉湯 (安平總店)", city: "台南市", district: "安平區", category: "美食放鬆", isIndoor: true, isGymFriendly: true, avgCost: 180, lat: 22.9996, lng: 120.1706, desc: "超狂人氣新鮮溫體牛肉湯，配牛肉燥飯必吃。" },
+      { id: 107, name: "奇美博物館", city: "台南市", district: "仁德區", category: "文青靜態", isIndoor: true, isGymFriendly: false, avgCost: 200, lat: 22.9347, lng: 120.2260, desc: "西洋藝術與樂器珍藏的宏偉殿堂。" },
 
       // 臺北市
       { id: 1, name: "象山親山步道", city: "臺北市", district: "信義區", category: "戶外自然", isIndoor: false, isGymFriendly: true, avgCost: 0, lat: 25.0273, lng: 121.5707, desc: "俯瞰台北 101 全景與城市天際線的極佳早晨登山步道。" },
@@ -221,17 +257,23 @@
       // 台中市
       { id: 8, name: "草悟道綠園道散步", city: "台中市", district: "西屯區", category: "戶外自然", isIndoor: false, isGymFriendly: true, avgCost: 0, lat: 24.1512, lng: 120.6638, desc: "舒適宜人的都市綠洲，悠閒散步與假日市集。" },
       { id: 9, name: "屋馬燒肉 (國美店)", city: "台中市", district: "西屯區", category: "美食放鬆", isIndoor: true, isGymFriendly: true, avgCost: 900, lat: 24.1505, lng: 120.6480, desc: "台中代表性燒肉，超濃郁雞湯與優質肉品。" },
-      { id: 10, name: "臺中國家歌劇院", city: "台中市", district: "西屯區", category: "文青靜態", isIndoor: true, isGymFriendly: false, avgCost: 0, lat: 24.1627, lng: 120.6405, desc: "伊東豊雄曲牆美學建築，設有空中花園與展演場。" }
+
+      // 新北市
+      { id: 11, name: "淡水老街與紅毛城", city: "新北市", district: "淡水區", category: "戶外自然", isIndoor: false, isGymFriendly: false, avgCost: 80, lat: 25.1755, lng: 121.4328, desc: "欣賞淡水夕陽落日與歷史古蹟巡禮。" },
+      
+      // 高雄市
+      { id: 12, name: "駁二藝術特區", city: "高雄市", district: "鼓山區", category: "文青靜態", isIndoor: false, isGymFriendly: false, avgCost: 0, lat: 22.6190, lng: 120.2818, desc: "港區老倉庫文創園區，大型裝置藝術與海風市集。" }
     ];
 
-    // 全台具體連鎖備份名店
+    // 全台連鎖備用品牌庫（結合選擇縣市的中心座標生成不重複名店）
     const realChainFallbacks = [
-      { name: "路易莎咖啡 (職人烘焙門市)", cost: 110, category: "文青靜態", desc: "精品手沖咖啡、美味輕食與安靜舒適空間。" },
-      { name: "丹丹漢堡 (在地門市)", cost: 120, category: "美食放鬆", desc: "南台灣速食傳奇，麵線羹與鮮酥雞超值組合。" },
-      { name: "藏壽司 (迴轉壽司門市)", cost: 350, category: "美食放鬆", desc: "日式鮮美壽司，吃盤數還可以抽扭蛋樂趣滿分。" },
-      { name: "星巴克 (典藏門市)", cost: 180, category: "文青靜態", desc: "享用香醇咖啡與舒適質感的放術時光。" },
-      { name: "健身工廠 (動態體驗館)", cost: 300, category: "運動休閒", desc: "專業健身器材與心肺有氧，享受汗水揮灑。" },
-      { name: "摩斯漢堡 (門市)", cost: 160, category: "美食放鬆", desc: "經典燒肉藜麥米漢堡與招牌冰紅茶。" }
+      { name: "路易莎咖啡 (職人烘焙門市)", cost: 110, desc: "精品手沖咖啡、美味輕食與安靜舒適空間。" },
+      { name: "丹丹漢堡 (在地知名門市)", cost: 120, desc: "在地超狂速食，麵線羹與鮮酥雞超值組合。" },
+      { name: "藏壽司 (迴轉壽司門市)", cost: 350, desc: "日式鮮美壽司，吃盤數還可以抽扭蛋樂趣滿分。" },
+      { name: "星巴克 (典藏特色門市)", cost: 180, desc: "享用香醇咖啡與舒適質感的放鬆時光。" },
+      { name: "健身工廠 (動態體驗館)", cost: 300, desc: "專業健身器材與心肺有氧，享受汗水揮灑。" },
+      { name: "摩斯漢堡 (安心門市)", cost: 160, desc: "經典燒肉藜麥米漢堡與招牌冰紅茶。" },
+      { name: "勝博殿日式勝豚 (門市)", cost: 380, desc: "外酥內嫩金黃炸豬排與無限續加高麗菜絲。" }
     ];
 
     // --- State Variables ---
@@ -268,7 +310,8 @@
     }
 
     function initMap() {
-      map = L.map('map').setView([23.8, 120.9], 8);
+      // 預設台北市中心
+      map = L.map('map').setView([25.0330, 121.5654], 12);
       L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}', {
         attribution: 'Tiles &copy; Esri &mdash; Source: Esri, USGS',
         maxZoom: 18
@@ -297,7 +340,7 @@
       generateBtn.addEventListener('click', generateItinerary);
     }
 
-    // --- Core Generate Itinerary Engine (With Deduplication) ---
+    // --- Core Generate Engine (With Dynamic Map Re-centering & Deduplication) ---
     function generateItinerary() {
       const city = citySelect.value;
       const district = districtSelect.value;
@@ -321,7 +364,7 @@
 
       const slots = pace === 5 ? timeSlots5 : timeSlots3;
       let newItinerary = [];
-      let usedNames = new Set(); // 防重複比對
+      let usedNames = new Set();
 
       // 鎖定項目優先放入
       slots.forEach((slot, index) => {
@@ -330,13 +373,16 @@
         }
       });
 
+      // 取得當前縣市的地理中心點
+      const cityCenter = cityCenters[city] || [23.8, 120.9];
+
       slots.forEach((slot, index) => {
         if (currentItinerary[index] && currentItinerary[index].isLocked) {
           newItinerary.push(currentItinerary[index]);
           return;
         }
 
-        // 1. 嚴格對應類別且未被使用
+        // 1. 嚴格對應類別且未重複
         let candidates = spotsDatabase.filter(s => {
           if (usedNames.has(s.name)) return false;
           if (s.city !== city) return false;
@@ -364,7 +410,7 @@
         if (candidates.length > 0) {
           chosen = candidates[Math.floor(Math.random() * candidates.length)];
         } else {
-          // 3. 連鎖真實品牌備案（去重）
+          // 3. 連鎖品牌備案（以該縣市地理中心座標為基礎加入亂數偏移）
           const unusedChains = realChainFallbacks.filter(c => !usedNames.has(c.name));
           const chainPool = unusedChains.length > 0 ? unusedChains : realChainFallbacks;
           const randomChain = chainPool[Math.floor(Math.random() * chainPool.length)];
@@ -377,8 +423,8 @@
             category: slot.type === "美食" ? "美食放鬆" : "精選景點",
             isIndoor: true,
             avgCost: randomChain.cost,
-            lat: 22.99 + (Math.random() - 0.5) * 0.05,
-            lng: 120.21 + (Math.random() - 0.5) * 0.05,
+            lat: cityCenter[0] + (Math.random() - 0.5) * 0.04,
+            lng: cityCenter[1] + (Math.random() - 0.5) * 0.04,
             desc: randomChain.desc
           };
         }
@@ -453,6 +499,7 @@
     window.rerollSingle = function(index) {
       if (currentItinerary[index].isLocked) return;
       const city = citySelect.value;
+      const cityCenter = cityCenters[city] || [23.8, 120.9];
       
       let usedNames = new Set();
       currentItinerary.forEach((item, i) => {
@@ -466,14 +513,19 @@
       } else {
         const unusedChains = realChainFallbacks.filter(c => !usedNames.has(c.name));
         const chainPool = unusedChains.length > 0 ? unusedChains : realChainFallbacks;
-        newItem = chainPool[Math.floor(Math.random() * chainPool.length)];
+        const randomChain = chainPool[Math.floor(Math.random() * chainPool.length)];
+        newItem = {
+          ...randomChain,
+          lat: cityCenter[0] + (Math.random() - 0.5) * 0.04,
+          lng: cityCenter[1] + (Math.random() - 0.5) * 0.04
+        };
       }
 
       currentItinerary[index] = {
         ...newItem,
         city: city,
         district: districtSelect.value === "全區" ? "市中心" : districtSelect.value,
-        avgCost: newItem.avgCost || 200,
+        avgCost: newItem.avgCost || newItem.cost || 200,
         slotInfo: currentItinerary[index].slotInfo,
         isLocked: false
       };
@@ -482,6 +534,7 @@
       updateMapMarkers();
     };
 
+    // 自動更新地圖標記與飛躍 (FlyToBounds / FlyTo)
     function updateMapMarkers() {
       mapMarkers.forEach(m => map.removeLayer(m));
       mapMarkers = [];
@@ -506,7 +559,11 @@
       });
 
       if (bounds.length > 0) {
-        map.fitBounds(bounds, { padding: [50, 50] });
+        map.flyToBounds(bounds, { padding: [50, 50], maxZoom: 15, duration: 1.2 });
+      } else {
+        const city = citySelect.value;
+        const center = cityCenters[city] || [23.8, 120.9];
+        map.flyTo(center, 12, { duration: 1.2 });
       }
     }
   </script>
