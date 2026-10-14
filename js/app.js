@@ -34,8 +34,13 @@ document.addEventListener('DOMContentLoaded', () => {
  * 初始化縣市選單
  */
 function initCitySelect() {
-  if (typeof districtGeoMap === 'undefined') return;
-  citySelect.innerHTML = Object.keys(districtGeoMap).map(city => `<option value="${city}">${city}</option>`).join('');
+  const geoMap = window.districtGeoMap || (typeof districtGeoMap !== 'undefined' ? districtGeoMap : null);
+  if (!geoMap) {
+    console.error("districtGeoMap 資料未載入，請確認 js/geoData.js 是否正確引入！");
+    return;
+  }
+  const cities = Object.keys(geoMap);
+  citySelect.innerHTML = cities.map(city => `<option value="${city}">${city}</option>`).join('');
   updateDistricts();
 }
 
@@ -43,9 +48,11 @@ function initCitySelect() {
  * 連動更新鄉鎮選單
  */
 function updateDistricts() {
+  const geoMap = window.districtGeoMap || (typeof districtGeoMap !== 'undefined' ? districtGeoMap : null);
+  if (!geoMap || !citySelect) return;
   const city = citySelect.value;
-  const cityData = districtGeoMap[city];
-  const districts = cityData ? ["全區", ...Object.keys(cityData.districts)] : ["全區"];
+  const cityData = geoMap[city];
+  const districts = (cityData && cityData.districts) ? ["全區", ...Object.keys(cityData.districts)] : ["全區"];
   districtSelect.innerHTML = districts.map(d => `<option value="${d}">${d}</option>`).join('');
 }
 
@@ -53,6 +60,7 @@ function updateDistricts() {
  * 初始化 Leaflet 地圖
  */
 function initMap() {
+  if (typeof L === 'undefined') return;
   map = L.map('map').setView([25.0330, 121.5654], 12);
   L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}', {
     attribution: 'Tiles &copy; Esri &mdash; Source: Esri, USGS',
@@ -64,35 +72,46 @@ function initMap() {
  * 綁定 UI 操作事件
  */
 function bindEvents() {
-  citySelect.addEventListener('change', () => {
-    updateDistricts();
-    fetchOSMData(citySelect.value, districtSelect.value, updatePreloadUI);
-  });
+  if (citySelect) {
+    citySelect.addEventListener('change', () => {
+      updateDistricts();
+      fetchOSMData(citySelect.value, districtSelect.value, updatePreloadUI);
+    });
+  }
 
-  districtSelect.addEventListener('change', () => {
-    fetchOSMData(citySelect.value, districtSelect.value, updatePreloadUI);
-  });
+  if (districtSelect) {
+    districtSelect.addEventListener('change', () => {
+      fetchOSMData(citySelect.value, districtSelect.value, updatePreloadUI);
+    });
+  }
 
-  budgetSlider.addEventListener('input', (e) => {
-    budgetValue.textContent = `NT$ ${Number(e.target.value).toLocaleString()}`;
-  });
+  if (budgetSlider && budgetValue) {
+    budgetSlider.addEventListener('input', (e) => {
+      budgetValue.textContent = `NT$ ${Number(e.target.value).toLocaleString()}`;
+    });
+  }
 
-  document.getElementById('tagContainer').addEventListener('click', (e) => {
-    if (e.target.classList.contains('tag-btn')) {
-      const tag = e.target.dataset.tag;
-      if (selectedTags.has(tag)) {
-        selectedTags.delete(tag);
-        e.target.classList.remove('bg-emerald-600', 'text-white');
-        e.target.classList.add('bg-slate-50');
-      } else {
-        selectedTags.add(tag);
-        e.target.classList.add('bg-emerald-600', 'text-white');
-        e.target.classList.remove('bg-slate-50');
+  const tagContainer = document.getElementById('tagContainer');
+  if (tagContainer) {
+    tagContainer.addEventListener('click', (e) => {
+      if (e.target.classList.contains('tag-btn')) {
+        const tag = e.target.dataset.tag;
+        if (selectedTags.has(tag)) {
+          selectedTags.delete(tag);
+          e.target.classList.remove('bg-emerald-600', 'text-white');
+          e.target.classList.add('bg-slate-50');
+        } else {
+          selectedTags.add(tag);
+          e.target.classList.add('bg-emerald-600', 'text-white');
+          e.target.classList.remove('bg-slate-50');
+        }
       }
-    }
-  });
+    });
+  }
 
-  generateBtn.addEventListener('click', handleGenerate);
+  if (generateBtn) {
+    generateBtn.addEventListener('click', handleGenerate);
+  }
 }
 
 function updatePreloadUI(isReady, text) {
@@ -137,7 +156,7 @@ function sortItineraryByDistance(items) {
 }
 
 function calculateDistance(lat1, lon1, lat2, lon2) {
-  const R = 6371; // 地球半徑 (km)
+  const R = 6371;
   const dLat = (lat2 - lat1) * Math.PI / 180;
   const dLon = (lon2 - lon1) * Math.PI / 180;
   const a = Math.sin(dLat/2) * Math.sin(dLat/2) +
@@ -161,7 +180,6 @@ async function handleGenerate() {
   document.getElementById('btnText').textContent = "檢索中...";
   generateBtn.disabled = true;
 
-  // 1. 取得 OSM 實時點位
   let apiSpots = await fetchOSMData(city, district, updatePreloadUI);
 
   const timeSlots5 = [
@@ -188,8 +206,8 @@ async function handleGenerate() {
     }
   });
 
-  // 嚴格縣市隔離備援池：僅限當前選擇之縣市
-  const cityStrictFallbackPool = (typeof REAL_VENUES_DB !== 'undefined') ? REAL_VENUES_DB.filter(v => v.city === city) : [];
+  const fallbackPool = window.REAL_VENUES_DB || (typeof REAL_VENUES_DB !== 'undefined' ? REAL_VENUES_DB : []);
+  const cityStrictFallbackPool = fallbackPool.filter(v => v.city === city);
 
   slots.forEach((slot, index) => {
     if (currentItinerary[index] && currentItinerary[index].isLocked) {
@@ -197,7 +215,6 @@ async function handleGenerate() {
       return;
     }
 
-    // 1階比對：API 實時點位
     let candidates = (apiSpots || []).filter(s => {
       if (usedNames.has(s.name)) return false;
       if (s.type !== slot.type) return false;
@@ -212,7 +229,6 @@ async function handleGenerate() {
     if (candidates.length > 0) {
       chosen = candidates[Math.floor(Math.random() * candidates.length)];
     } else {
-      // 2階降級：同縣市備援庫
       const fallbackCandidates = cityStrictFallbackPool.filter(p => {
         if (usedNames.has(p.name)) return false;
         if (p.type !== slot.type) return false;
@@ -245,7 +261,6 @@ async function handleGenerate() {
     rawSelectedSpots.push({ ...chosen, slotInfo: slot, isLocked: false });
   });
 
-  // 空間距離順暢度排序
   currentItinerary = sortItineraryByDistance(rawSelectedSpots);
   
   renderTimeline();
@@ -332,7 +347,8 @@ window.rerollSingle = function(index) {
   if (candidates.length > 0) {
     newItem = candidates[Math.floor(Math.random() * candidates.length)];
   } else {
-    const cityPool = (typeof REAL_VENUES_DB !== 'undefined') ? REAL_VENUES_DB.filter(v => v.city === city && v.type === slot.type && !usedNames.has(v.name)) : [];
+    const fallbackPool = window.REAL_VENUES_DB || (typeof REAL_VENUES_DB !== 'undefined' ? REAL_VENUES_DB : []);
+    const cityPool = fallbackPool.filter(v => v.city === city && v.type === slot.type && !usedNames.has(v.name));
     newItem = cityPool.length > 0 ? cityPool[Math.floor(Math.random() * cityPool.length)] : {
       name: `${city}特色景點`, city: city, district: district, category: "精選", avgCost: 150, lat: 25.033, lng: 121.565, desc: "在地點位"
     };
@@ -352,6 +368,7 @@ window.rerollSingle = function(index) {
  * 更新 Leaflet 地圖標記與視野
  */
 function updateMapMarkers() {
+  if (!map) return;
   mapMarkers.forEach(m => map.removeLayer(m));
   mapMarkers = [];
   let bounds = [];
