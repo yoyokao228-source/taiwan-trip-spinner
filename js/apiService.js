@@ -1,32 +1,33 @@
 /**
  * Overpass API 實時資料抓取服務 (API Service with Abort Controller & Caching)
  */
-const overpassCache = {};
+window.overpassCache = {};
 
 /**
  * 取得指定縣市與鄉鎮區之精確中心座標
  */
-function getQueryCenter(city, district) {
-  if (typeof districtGeoMap === 'undefined') return [25.0330, 121.5654];
-  const cityInfo = districtGeoMap[city];
+window.getQueryCenter = function(city, district) {
+  const geoMap = window.districtGeoMap;
+  if (!geoMap) return [25.0330, 121.5654];
+  const cityInfo = geoMap[city];
   if (!cityInfo) return [25.0330, 121.5654];
   if (district !== "全區" && cityInfo.districts && cityInfo.districts[district]) {
     return cityInfo.districts[district];
   }
   return cityInfo.center;
-}
+};
 
 /**
  * 發送 Overpass API 查詢實時 OSM 景點與美食
  */
-async function fetchOSMData(city, district, onStatusUpdate) {
+window.fetchOSMData = async function(city, district, onStatusUpdate) {
   const cacheKey = `${city}_${district}`;
-  if (overpassCache[cacheKey]) {
-    if (onStatusUpdate) onStatusUpdate(true, `✅ [${city} ${district}] 已自快取獲取 ${overpassCache[cacheKey].length} 筆地點`);
-    return overpassCache[cacheKey];
+  if (window.overpassCache[cacheKey]) {
+    if (onStatusUpdate) onStatusUpdate(true, `✅ [${city} ${district}] 已自快取獲取 ${window.overpassCache[cacheKey].length} 筆地點`);
+    return window.overpassCache[cacheKey];
   }
 
-  const center = getQueryCenter(city, district);
+  const center = window.getQueryCenter(city, district);
   const searchRadius = district === "全區" ? 5000 : 3500;
 
   if (onStatusUpdate) onStatusUpdate(false, `正在讀取 [${city} ${district}] 最新地點...`);
@@ -58,7 +59,7 @@ async function fetchOSMData(city, district, onStatusUpdate) {
     const data = await res.json();
     const parsed = parseOverpassElements(data.elements, city, district);
 
-    overpassCache[cacheKey] = parsed;
+    window.overpassCache[cacheKey] = parsed;
     if (onStatusUpdate) onStatusUpdate(true, `✅ [${city} ${district}] 獲取 ${parsed.length} 筆實時地點`);
     return parsed;
   } catch (err) {
@@ -67,7 +68,7 @@ async function fetchOSMData(city, district, onStatusUpdate) {
     if (onStatusUpdate) onStatusUpdate(true, `✅ [${city} ${district}] API 逾時，已準備備援資料`);
     return [];
   }
-}
+};
 
 /**
  * 解析並規格化 OSM 回傳節點
