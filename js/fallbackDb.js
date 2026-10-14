@@ -1,7 +1,7 @@
 /**
  * 全台灣 22 縣市同縣市嚴格隔離真實名店與景點備援庫
  */
-const REAL_VENUES_DB = [
+window.REAL_VENUES_DB = [
   // 臺北市
   { city: "臺北市", district: "信義區", type: "美食", name: "一蘭拉麵 (台北本店)", category: "美食放鬆", avgCost: 320, isIndoor: true, isGymFriendly: true, nightOnly: false, mondayOff: false, lat: 25.0345, lng: 121.5670, desc: "經典豚骨湯頭與獨立座位用餐體驗。" },
   { city: "臺北市", district: "信義區", type: "美食", name: "少點鹽健康餐盒", category: "美食放鬆", avgCost: 160, isIndoor: true, isGymFriendly: true, nightOnly: false, mondayOff: false, lat: 25.0380, lng: 121.5500, desc: "少油低GI嫩煎高蛋白原型餐盒。" },
@@ -16,7 +16,7 @@ const REAL_VENUES_DB = [
   { city: "新北市", district: "板橋區", type: "美食", name: "小蒙牛頂級麻辣養生鍋", category: "美食放鬆", avgCost: 699, isIndoor: true, isGymFriendly: true, nightOnly: false, mondayOff: false, lat: 25.0117, lng: 121.4658, desc: "養生麻辣鴛鴦湯頭與豐富溫體肉品。" },
 
   // 基隆市
-  { city: "基隆市", district: "仁愛區", type: "美食", name: "基隆廟口夜市 (營養三明治)", category: "美食放鬆", avgCost: 150, isIndoor: false, isGymFriendly: false, nightOnly: true, mondayOff: false, lat: 25.1283, lng: 121.7419, desc: "全台知名夜市，匯聚鼎邊趖、泡泡冰與一口吃香腸。" },
+  { city: "基隆市", district: "仁愛區", type: "美食", name: "基隆廟口夜市", category: "美食放鬆", avgCost: 150, isIndoor: false, isGymFriendly: false, nightOnly: true, mondayOff: false, lat: 25.1283, lng: 121.7419, desc: "全台知名夜市，匯聚鼎邊趖、泡泡冰與一口吃香腸。" },
   { city: "基隆市", district: "中正區", type: "景點", name: "正濱漁港彩色屋", category: "戶外自然", avgCost: 0, isIndoor: false, isGymFriendly: false, nightOnly: false, mondayOff: false, lat: 25.1500, lng: 121.7600, desc: "台版威尼斯繽紛彩色建築港灣打卡地標。" },
 
   // 桃園市
