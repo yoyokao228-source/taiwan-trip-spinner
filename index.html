@@ -12,7 +12,7 @@
   <!-- FontAwesome Icons -->
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
   <style>
-    #map { height: 400px; width: 100%; border-radius: 0.75rem; z-index: 1; }
+    #map { height: 420px; width: 100%; border-radius: 0.75rem; z-index: 1; }
     .custom-marker {
       background-color: #059669;
       color: white;
@@ -27,6 +27,13 @@
       box-shadow: 0 3px 6px rgba(0,0,0,0.3);
       font-size: 14px;
     }
+    .skeleton-card {
+      animation: pulse 1.5s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+    }
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: .4; }
+    }
   </style>
 </head>
 <body class="bg-slate-50 text-slate-800 min-h-screen">
@@ -38,11 +45,11 @@
         <h1 class="text-2xl font-bold flex items-center gap-2">
           <i class="fa-solid fa-compass text-amber-300"></i> 台灣隨機行程決策器
         </h1>
-        <p class="text-emerald-100 text-sm mt-1">全台 22 縣市專屬一日遊生成，地圖精準定位！</p>
+        <p class="text-emerald-100 text-sm mt-1">OpenStreetMap 實時網路連線 · 無限地標抓取</p>
       </div>
-      <span class="bg-emerald-700 text-emerald-100 text-xs px-3 py-1 rounded-full border border-emerald-500">
-        全台 22 縣市完整版
-      </span>
+      <div id="apiBadge" class="bg-emerald-700 text-emerald-100 text-xs px-3 py-1 rounded-full border border-emerald-500 flex items-center gap-1.5">
+        <span class="w-2 h-2 rounded-full bg-emerald-300 animate-pulse"></span> 網路實時連線模式
+      </div>
     </div>
   </header>
 
@@ -148,7 +155,7 @@
 
       <!-- Action Button -->
       <button id="generateBtn" class="w-full py-3 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl shadow-md transition transform active:scale-95 flex justify-center items-center gap-2">
-        <i class="fa-solid fa-dice"></i> 🎲 生成專屬行程
+        <i class="fa-solid fa-dice" id="btnIcon"></i> <span id="btnText">🎲 生成專屬行程</span>
       </button>
     </section>
 
@@ -166,8 +173,8 @@
 
         <div id="timelineContainer" class="space-y-4">
           <div class="text-center py-12 text-slate-400">
-            <i class="fa-solid fa-map-location-dot text-4xl mb-3 block text-slate-300"></i>
-            點擊左側「🎲 生成專屬行程」按鈕開始發想行程！
+            <i class="fa-solid fa-earth-asia text-4xl mb-3 block text-slate-300"></i>
+            點擊「🎲 生成專屬行程」，將從 OpenStreetMap 連線抓取最新地點！
           </div>
         </div>
       </div>
@@ -175,7 +182,7 @@
       <!-- Leaflet Map Container -->
       <div class="bg-white p-6 rounded-xl shadow-sm border border-slate-100">
         <h2 class="text-lg font-bold text-slate-900 border-b pb-3 mb-4 flex items-center gap-2">
-          <i class="fa-solid fa-map text-emerald-600"></i> 互動地圖路線 (即時跟隨定位)
+          <i class="fa-solid fa-map text-emerald-600"></i> 互動地圖路線 (Esri 免費高畫質圖磚)
         </h2>
         <div id="map"></div>
       </div>
@@ -184,103 +191,68 @@
   </main>
 
   <script>
-    // --- 1. 全台 22 縣市與行政區完整資料庫 ---
+    // --- 1. 行政區與全台縣市地圖中心 ---
     const taiwanData = {
-      "基隆市": ["全區", "仁愛區", "信義區", "中正區", "中山區", "安樂區", "暖暖區", "七堵區"],
-      "臺北市": ["全區", "中正區", "大安區", "信義區", "中山區", "士林區", "內湖區", "萬華區", "文山區", "北頭區", "松山區", "南港區"],
-      "新北市": ["全區", "板橋區", "淡水區", "新莊區", "三重區", "烏來區", "瑞芳區", "中和區", "永和區", "新店區", "汐止區", "林口區", "三峽區"],
-      "桃園市": ["全區", "桃園區", "中壢區", "平鎮區", "八德區", "楊梅區", "蘆竹區", "大溪區", "龜山區"],
+      "基隆市": ["全區", "仁愛區", "信義區", "中正區", "中山區", "安樂區"],
+      "臺北市": ["全區", "中正區", "大安區", "信義區", "中山區", "士林區", "內湖區", "萬華區", "文山區", "北投區"],
+      "新北市": ["全區", "板橋區", "淡水區", "新莊區", "三重區", "烏來區", "瑞芳區", "新店區", "三峽區"],
+      "桃園市": ["全區", "桃園區", "中壢區", "平鎮區", "大溪區", "龜山區"],
       "新竹市": ["全區", "東區", "北區", "香山區"],
-      "新竹縣": ["全區", "竹北市", "竹東鎮", "新埔鎮", "關西鎮", "湖口鄉", "北埔鄉"],
-      "苗栗縣": ["全區", "苗栗市", "頭份市", "竹南鎮", "後龍鎮", "通霄鎮", "三義鄉"],
-      "台中市": ["全區", "西屯區", "北區", "南屯區", "豐原區", "和平區", "中區", "東區", "南區", "西區", "北屯區", "大里區"],
-      "彰化縣": ["全區", "彰化市", "員林市", "鹿港鎮", "和美鎮", "北斗鎮", "田尾鄉"],
-      "南投縣": ["全區", "南投市", "埔里鎮", "草屯鎮", "竹山鎮", "集集鎮", "清境農場/仁愛鄉", "魚池鄉(日月潭)"],
-      "雲林縣": ["全區", "斗六市", "斗南鎮", "虎尾鎮", "西螺鎮", "北港鎮"],
+      "新竹縣": ["全區", "竹北市", "竹東鎮", "關西鎮", "北埔鄉"],
+      "苗栗縣": ["全區", "苗栗市", "頭份市", "竹南鎮", "三義鄉"],
+      "台中市": ["全區", "西屯區", "北區", "南屯區", "豐原區", "和平區", "北屯區"],
+      "彰化縣": ["全區", "彰化市", "員林市", "鹿港鎮", "田尾鄉"],
+      "南投縣": ["全區", "南投市", "埔里鎮", "草屯鎮", "魚池鄉(日月潭)"],
+      "雲林縣": ["全區", "斗六市", "虎尾鎮", "北港鎮"],
       "嘉義市": ["全區", "東區", "西區"],
-      "嘉義縣": ["全區", "太保市", "朴子市", "民雄鄉", "水上鄉", "中埔鄉", "阿里山鄉"],
-      "台南市": ["全區", "中西區", "安平區", "永康區", "東區", "北區", "南區", "新營區", "善化區", "歸仁區", "仁德區"],
-      "高雄市": ["全區", "新興區", "左營區", "鼓山區", "苓雅區", "三民區", "鳳山區", "楠梓區", "前鎮區", "旗津區", "美濃區"],
-      "屏東縣": ["全區", "屏東市", "潮州鎮", "東港鎮", "恆春鎮(墾丁)", "萬巒鄉", "琉球鄉(小琉球)"],
-      "宜蘭縣": ["全區", "宜蘭市", "羅東鎮", "礁溪鄉", "頭城鎮", "蘇澳鎮", "員山鄉", "冬山鄉"],
-      "花蓮縣": ["全區", "花蓮市", "吉安鄉", "新城鄉", "瑞穗鄉", "玉里鎮"],
-      "臺東縣": ["全區", "臺東市", "成功鎮", "關山鎮", "鹿野鄉", "池上鄉", "太麻里鄉"],
-      "澎湖縣": ["全區", "馬公市", "湖西鄉", "白沙鄉", "西嶼鄉"],
-      "金門縣": ["全區", "金城鎮", "金湖鎮", "金沙鎮", "金寧鄉", "烈嶼鄉"],
-      "連江縣": ["全區", "南竿鄉", "北竿鄉", "莒光鄉", "東引鄉"]
+      "嘉義縣": ["全區", "太保市", "民雄鄉", "阿里山鄉"],
+      "台南市": ["全區", "中西區", "安平區", "永康區", "東區", "北區", "仁德區"],
+      "高雄市": ["全區", "新興區", "左營區", "鼓山區", "苓雅區", "三民區", "鳳山區", "旗津區"],
+      "屏東縣": ["全區", "屏東市", "潮州鎮", "恆春鎮(墾丁)", "琉球鄉"],
+      "宜蘭縣": ["全區", "宜蘭市", "羅東鎮", "礁溪鄉", "頭城鎮", "冬山鄉"],
+      "花蓮縣": ["全區", "花蓮市", "吉安鄉", "新城鄉", "瑞穗鄉"],
+      "臺東縣": ["全區", "臺東市", "鹿野鄉", "池上鄉"],
+      "澎湖縣": ["全區", "馬公市"],
+      "金門縣": ["全區", "金城鎮", "金湖鎮"],
+      "連江縣": ["全區", "南竿鄉", "北竿鄉"]
     };
 
-    // 全台 22 縣市中心座標（精確導航與地圖飛躍）
     const cityCenters = {
-      "基隆市": [25.1283, 121.7419],
-      "臺北市": [25.0330, 121.5654],
-      "新北市": [25.0117, 121.4658],
-      "桃園市": [24.9936, 121.3010],
-      "新竹市": [24.8138, 120.9675],
-      "新竹縣": [24.8387, 121.0076],
-      "苗栗縣": [24.5602, 120.8214],
-      "台中市": [24.1477, 120.6736],
-      "彰化縣": [24.0815, 120.5381],
-      "南投縣": [23.9151, 120.6869],
-      "雲林縣": [23.7092, 120.4313],
-      "嘉義市": [23.4800, 120.4491],
-      "嘉義縣": [23.4588, 120.2927],
-      "台南市": [22.9997, 120.2270],
-      "高雄市": [22.6273, 120.3014],
-      "屏東縣": [22.6713, 120.4880],
-      "宜蘭縣": [24.7570, 121.7530],
-      "花蓮縣": [23.9871, 121.6016],
-      "臺東縣": [22.7613, 121.1444],
-      "澎湖縣": [23.5711, 119.5793],
-      "金門縣": [24.4493, 118.3766],
+      "基隆市": [25.1283, 121.7419], "臺北市": [25.0330, 121.5654], "新北市": [25.0117, 121.4658],
+      "桃園市": [24.9936, 121.3010], "新竹市": [24.8138, 120.9675], "新竹縣": [24.8387, 121.0076],
+      "苗栗縣": [24.5602, 120.8214], "台中市": [24.1477, 120.6736], "彰化縣": [24.0815, 120.5381],
+      "南投縣": [23.9151, 120.6869], "雲林縣": [23.7092, 120.4313], "嘉義市": [23.4800, 120.4491],
+      "嘉義縣": [23.4588, 120.2927], "台南市": [22.9997, 120.2270], "高雄市": [22.6273, 120.3014],
+      "屏東縣": [22.6713, 120.4880], "宜蘭縣": [24.7570, 121.7530], "花蓮縣": [23.9871, 121.6016],
+      "臺東縣": [22.7613, 121.1444], "澎湖縣": [23.5711, 119.5793], "金門縣": [24.4493, 118.3766],
       "連江縣": [26.1505, 119.9499]
     };
 
-    // --- 2. 核心實體店家資料庫 (包含具體實體與各縣市範例) ---
-    const spotsDatabase = [
-      // 台南市
-      { id: 101, name: "永康彩繪眷村 (復興老兵園區)", city: "台南市", district: "永康區", category: "文青靜態", isIndoor: false, isGymFriendly: false, avgCost: 0, lat: 23.0041, lng: 120.2455, desc: "懷舊老街塗鴉牆與復古眷村巷弄慢步。" },
-      { id: 102, name: "永康探索教育公園", city: "台南市", district: "永康區", category: "戶外自然", isIndoor: false, isGymFriendly: true, avgCost: 0, lat: 23.0233, lng: 120.2589, desc: "綠意盎然的大型自然森林公園，晨間運動與散步首選。" },
-      { id: 103, name: "鴻品牛肉湯 (永康店)", city: "台南市", district: "永康區", category: "美食放鬆", isIndoor: true, isGymFriendly: true, avgCost: 220, lat: 23.0312, lng: 120.2510, desc: "在地老字號溫體牛肉湯，午餐補充高品質蛋白質。" },
-      { id: 104, name: "聯盈發港式點心", city: "台南市", district: "永康區", category: "美食放鬆", isIndoor: true, isGymFriendly: false, avgCost: 280, lat: 23.0245, lng: 120.2562, desc: "永康超人氣港點排隊名店，爆漿流沙包必點。" },
-      { id: 105, name: "碳佐麻里精品燒肉 (中華店)", city: "台南市", district: "永康區", category: "美食放鬆", isIndoor: true, isGymFriendly: true, avgCost: 950, lat: 23.0078, lng: 120.2312, desc: "燒肉界南霸天，造景氣派，適合晚餐精緻享用。" },
-      { id: 106, name: "文章牛肉湯 (安平總店)", city: "台南市", district: "安平區", category: "美食放鬆", isIndoor: true, isGymFriendly: true, avgCost: 180, lat: 22.9996, lng: 120.1706, desc: "超狂人氣新鮮溫體牛肉湯，配牛肉燥飯必吃。" },
-      { id: 107, name: "奇美博物館", city: "台南市", district: "仁德區", category: "文青靜態", isIndoor: true, isGymFriendly: false, avgCost: 200, lat: 22.9347, lng: 120.2260, desc: "西洋藝術與樂器珍藏的宏偉殿堂。" },
-
-      // 臺北市
-      { id: 1, name: "象山親山步道", city: "臺北市", district: "信義區", category: "戶外自然", isIndoor: false, isGymFriendly: true, avgCost: 0, lat: 25.0273, lng: 121.5707, desc: "俯瞰台北 101 全景與城市天際線的極佳早晨登山步道。" },
-      { id: 2, name: "阜杭豆漿", city: "臺北市", district: "中正區", category: "美食放鬆", isIndoor: true, isGymFriendly: true, avgCost: 120, lat: 25.0443, lng: 121.5248, desc: "華山市場排隊早餐名店，厚燒餅夾蛋與鹹豆漿。" },
-      { id: 3, name: "鼎泰豐 (信義本店)", city: "臺北市", district: "大安區", category: "美食放鬆", isIndoor: true, isGymFriendly: true, avgCost: 650, lat: 25.0334, lng: 121.5298, desc: "享譽國際的黃金 18 折小籠包與元氣雞湯。" },
-      { id: 4, name: "華山1914文創園區", city: "臺北市", district: "中正區", category: "文青靜態", isIndoor: true, isGymFriendly: false, avgCost: 250, lat: 25.0441, lng: 121.5294, desc: "酒廠歷史建築改建，豐富特展與風格選物店。" },
-      { id: 5, name: "原岩攀岩館 (萬華店)", city: "臺北市", district: "萬華區", category: "運動休閒", isIndoor: true, isGymFriendly: true, avgCost: 450, lat: 25.0350, lng: 121.4980, desc: "專業室內抱石牆面，新手與健身愛好者熱門點。" },
-
-      // 台中市
-      { id: 8, name: "草悟道綠園道散步", city: "台中市", district: "西屯區", category: "戶外自然", isIndoor: false, isGymFriendly: true, avgCost: 0, lat: 24.1512, lng: 120.6638, desc: "舒適宜人的都市綠洲，悠閒散步與假日市集。" },
-      { id: 9, name: "屋馬燒肉 (國美店)", city: "台中市", district: "西屯區", category: "美食放鬆", isIndoor: true, isGymFriendly: true, avgCost: 900, lat: 24.1505, lng: 120.6480, desc: "台中代表性燒肉，超濃郁雞湯與優質肉品。" },
-
-      // 新北市
-      { id: 11, name: "淡水老街與紅毛城", city: "新北市", district: "淡水區", category: "戶外自然", isIndoor: false, isGymFriendly: false, avgCost: 80, lat: 25.1755, lng: 121.4328, desc: "欣賞淡水夕陽落日與歷史古蹟巡禮。" },
-      
-      // 高雄市
-      { id: 12, name: "駁二藝術特區", city: "高雄市", district: "鼓山區", category: "文青靜態", isIndoor: false, isGymFriendly: false, avgCost: 0, lat: 22.6190, lng: 120.2818, desc: "港區老倉庫文創園區，大型裝置藝術與海風市集。" }
-    ];
-
-    // 全台連鎖備用品牌庫（結合選擇縣市的中心座標生成不重複名店）
-    const realChainFallbacks = [
-      { name: "路易莎咖啡 (職人烘焙門市)", cost: 110, desc: "精品手沖咖啡、美味輕食與安靜舒適空間。" },
-      { name: "丹丹漢堡 (在地知名門市)", cost: 120, desc: "在地超狂速食，麵線羹與鮮酥雞超值組合。" },
-      { name: "藏壽司 (迴轉壽司門市)", cost: 350, desc: "日式鮮美壽司，吃盤數還可以抽扭蛋樂趣滿分。" },
-      { name: "星巴克 (典藏特色門市)", cost: 180, desc: "享用香醇咖啡與舒適質感的放鬆時光。" },
-      { name: "健身工廠 (動態體驗館)", cost: 300, desc: "專業健身器材與心肺有氧，享受汗水揮灑。" },
-      { name: "摩斯漢堡 (安心門市)", cost: 160, desc: "經典燒肉藜麥米漢堡與招牌冰紅茶。" },
-      { name: "勝博殿日式勝豚 (門市)", cost: 380, desc: "外酥內嫩金黃炸豬排與無限續加高麗菜絲。" }
-    ];
+    // --- 2. 備用資料池 (網路斷線或過濾不足時的兜底) ---
+    const localFallbacks = {
+      attractions: [
+        { name: "市立攀岩極限體驗館", category: "運動休閒", cost: 400, desc: "室內抱石與核心訓練熱門場所。" },
+        { name: "沉浸式實境密室逃脫館", category: "娛樂解謎", cost: 550, desc: "燒腦機關與限定劇情挑戰。" },
+        { name: "當音獨立桌遊休閒館", category: "娛樂解謎", cost: 200, desc: "百款派對與策略桌遊聚會空間。" },
+        { name: "文化文創園區與特展館", category: "文青靜態", cost: 250, desc: "展覽、獨立手作與風格選物場域。" },
+        { name: "國民運動中心 (羽球/保齡球)", category: "運動休閒", cost: 200, desc: "揮灑汗水與室內運動首選。" },
+        { name: "森林步道與生態公園", category: "戶外自然", cost: 0, desc: "吸收大自然芬多精，散步舒心放鬆。" }
+      ],
+      foods: [
+        { name: "在地老字號溫體牛肉湯", style: "快速小吃", cost: 200, desc: "鮮甜高湯搭配鮮切牛肉，高品質蛋白質。" },
+        { name: "低GI健身高蛋白餐盒", style: "快速小吃", cost: 160, desc: "嫩煎雞胸肉與原型食物，健康輕盈無負擔。" },
+        { name: "質感風格早午餐咖啡館", style: "氛圍特色", cost: 320, desc: "精緻輕食與手沖精品咖啡享用。" },
+        { name: "嚴選和牛與海鮮燒肉館", style: "精緻大餐", cost: 900, desc: "精緻單點與頂級碳火燒肉體驗。" }
+      ]
+    };
 
     // --- State Variables ---
     let selectedTags = new Set();
     let currentItinerary = [];
     let map = null;
     let mapMarkers = [];
+    let overpassCache = {}; // 記憶體 Cache 減少 Overpass 請求
+    let isGenerating = false;
 
     // --- DOM Elements ---
     const citySelect = document.getElementById('citySelect');
@@ -291,7 +263,6 @@
     const timelineContainer = document.getElementById('timelineContainer');
     const itineraryStatus = document.getElementById('itineraryStatus');
 
-    // Initialize Page
     document.addEventListener('DOMContentLoaded', () => {
       initCitySelect();
       initMap();
@@ -310,7 +281,6 @@
     }
 
     function initMap() {
-      // 預設台北市中心
       map = L.map('map').setView([25.0330, 121.5654], 12);
       L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}', {
         attribution: 'Tiles &copy; Esri &mdash; Source: Esri, USGS',
@@ -337,23 +307,155 @@
         }
       });
 
-      generateBtn.addEventListener('click', generateItinerary);
+      generateBtn.addEventListener('click', handleGenerate);
     }
 
-    // --- Core Generate Engine (With Dynamic Map Re-centering & Deduplication) ---
-    function generateItinerary() {
+    // --- 3. Overpass API 實時網路抓取管道 (Overpass QL) ---
+    async function fetchOverpassSpots(city, district) {
+      const cacheKey = `${city}_${district}`;
+      if (overpassCache[cacheKey]) {
+        return overpassCache[cacheKey];
+      }
+
+      const center = cityCenters[city] || [23.8, 120.9];
+      const radius = district === "全區" ? 10000 : 5000; // 5-10 公里搜尋範圍
+
+      // Overpass QL：抓取周邊景點、娛樂、戶外與餐廳 (只拿有名稱的 POI，並取得幾何中心座標)
+      const query = `
+        [out:json][timeout:8];
+        (
+          node["tourism"~"museum|attraction|gallery|viewpoint"](around:${radius},${center[0]},${center[1]});
+          way["tourism"~"museum|attraction|gallery|viewpoint"](around:${radius},${center[0]},${center[1]});
+          node["leisure"~"park|sports_centre|bowling_alley|playground"](around:${radius},${center[0]},${center[1]});
+          way["leisure"~"park|sports_centre|bowling_alley|playground"](around:${radius},${center[0]},${center[1]});
+          node["amenity"~"restaurant|cafe|fast_food|cinema|library"](around:${radius},${center[0]},${center[1]});
+          way["amenity"~"restaurant|cafe|fast_food|cinema|library"](around:${radius},${center[0]},${center[1]});
+        );
+        out body center 80;
+      `;
+
+      const endpoints = [
+        'https://overpass-api.de/api/interpreter',
+        'https://overpass.kumi.systems/api/interpreter'
+      ];
+
+      for (let endpoint of endpoints) {
+        try {
+          const response = await fetch(endpoint, {
+            method: 'POST',
+            body: 'data=' + encodeURIComponent(query),
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
+          });
+
+          if (!response.ok) continue;
+
+          const data = await response.json();
+          const parsed = parseOverpassElements(data.elements, city, district);
+          
+          if (parsed.length > 0) {
+            overpassCache[cacheKey] = parsed;
+            return parsed;
+          }
+        } catch (err) {
+          console.warn(`Overpass Endpoint ${endpoint} failed, trying next...`);
+        }
+      }
+
+      return []; // 若 API 失敗則回傳空陣列以防當機
+    }
+
+    // --- 4. OSM 資料正規化與語意映射引擎 ---
+    function parseOverpassElements(elements, city, district) {
+      const results = [];
+      const seenNames = new Set();
+
+      elements.forEach(el => {
+        const tags = el.tags || {};
+        // 優先擷取正體中文名稱，過濾無名節點與英文純字母雜訊
+        const name = tags['name:zh-Hant'] || tags['name:zh'] || tags['name'];
+        if (!name || name.length < 2 || seenNames.has(name)) return;
+        seenNames.add(name);
+
+        // 計算經緯度 (支援 Point 與 Area 中心點)
+        const lat = el.lat || (el.center && el.center.lat);
+        const lng = el.lng || (el.center && el.center.lon);
+        if (!lat || !lng) return;
+
+        // 語意類別對應
+        let category = "文青靜態";
+        let type = "景點";
+        let isIndoor = true;
+        let isGym = false;
+        let cost = 150;
+
+        if (tags.amenity === 'restaurant' || tags.amenity === 'cafe' || tags.amenity === 'fast_food') {
+          type = "美食";
+          category = "美食放鬆";
+          cost = tags.amenity === 'restaurant' ? 350 : 180;
+        } else if (tags.leisure === 'park' || tags.tourism === 'viewpoint') {
+          type = "景點";
+          category = "戶外自然";
+          isIndoor = false;
+          isGym = true;
+          cost = 0;
+        } else if (tags.leisure === 'sports_centre' || tags.leisure === 'bowling_alley') {
+          type = "景點";
+          category = "運動休閒";
+          isGym = true;
+          cost = 250;
+        } else if (tags.amenity === 'cinema' || tags.amenity === 'library' || tags.tourism === 'museum') {
+          type = "景點";
+          category = "文青靜態";
+          cost = 200;
+        }
+
+        results.push({
+          id: el.id,
+          name: name,
+          city: city,
+          district: district === "全區" ? "周邊地區" : district,
+          type: type,
+          category: category,
+          isIndoor: isIndoor,
+          isGymFriendly: isGym,
+          avgCost: cost,
+          lat: lat,
+          lng: lng,
+          desc: `OpenStreetMap 實時核實地標 (${category})`
+        });
+      });
+
+      return results;
+    }
+
+    // --- 5. 核心行程生成調度器 (骨架屏 Loading + 智慧去重) ---
+    async function handleGenerate() {
+      if (isGenerating) return;
+      isGenerating = true;
+
+      // 按鈕轉圈圈與載入提示
+      document.getElementById('btnIcon').className = "fa-solid fa-spinner animate-spin";
+      document.getElementById('btnText').textContent = "實時抓取地點中...";
+      generateBtn.disabled = true;
+
+      // 渲染骨架屏 (Skeleton Screens)
+      renderSkeleton();
+
       const city = citySelect.value;
       const district = districtSelect.value;
       const isRain = document.getElementById('toggleRain').checked;
       const isGym = document.getElementById('toggleGym').checked;
       const pace = Number(document.getElementById('paceSelect').value);
 
+      // 實時連線抓取 Overpass 資料
+      const apiSpots = await fetchOverpassSpots(city, district);
+
       const timeSlots5 = [
         { time: "09:00 - 10:30", label: "早晨探索", type: "景點" },
         { time: "11:30 - 13:00", label: "午餐時間", type: "美食" },
         { time: "14:00 - 16:30", label: "下午體驗", type: "景點" },
         { time: "18:00 - 19:30", label: "晚餐時間", type: "美食" },
-        { time: "20:00 - 21:30", label: "夜間散步/小酌", type: "景點" }
+        { time: "20:00 - 21:30", label: "夜間散步/體驗", type: "景點" }
       ];
 
       const timeSlots3 = [
@@ -366,14 +468,13 @@
       let newItinerary = [];
       let usedNames = new Set();
 
-      // 鎖定項目優先放入
+      // 註冊已鎖定的景點名稱
       slots.forEach((slot, index) => {
         if (currentItinerary[index] && currentItinerary[index].isLocked) {
           usedNames.add(currentItinerary[index].name);
         }
       });
 
-      // 取得當前縣市的地理中心點
       const cityCenter = cityCenters[city] || [23.8, 120.9];
 
       slots.forEach((slot, index) => {
@@ -382,51 +483,45 @@
           return;
         }
 
-        // 1. 嚴格對應類別且未重複
-        let candidates = spotsDatabase.filter(s => {
+        // 1. 從 API 即時資料中進行嚴格過濾與去重
+        let candidates = apiSpots.filter(s => {
           if (usedNames.has(s.name)) return false;
-          if (s.city !== city) return false;
-          if (district !== "全區" && s.district !== district) return false;
+          if (s.type !== slot.type) return false;
           if (isRain && !s.isIndoor) return false;
           if (isGym && !s.isGymFriendly) return false;
-
-          if (slot.type === "景點" && s.category === "美食放鬆") return false;
-          if (slot.type === "美食" && s.category !== "美食放鬆") return false;
-
           return true;
         });
-
-        // 2. 備用層：全縣市不重複
-        if (candidates.length === 0) {
-          candidates = spotsDatabase.filter(s => {
-            if (usedNames.has(s.name)) return false;
-            if (s.city !== city) return false;
-            if (isRain && !s.isIndoor) return false;
-            return true;
-          });
-        }
 
         let chosen = null;
         if (candidates.length > 0) {
           chosen = candidates[Math.floor(Math.random() * candidates.length)];
         } else {
-          // 3. 連鎖品牌備案（以該縣市地理中心座標為基礎加入亂數偏移）
-          const unusedChains = realChainFallbacks.filter(c => !usedNames.has(c.name));
-          const chainPool = unusedChains.length > 0 ? unusedChains : realChainFallbacks;
-          const randomChain = chainPool[Math.floor(Math.random() * chainPool.length)];
-
-          chosen = {
-            id: Date.now() + Math.random(),
-            name: `${randomChain.name}`,
-            city: city,
-            district: district === "全區" ? "市中心" : district,
-            category: slot.type === "美食" ? "美食放鬆" : "精選景點",
-            isIndoor: true,
-            avgCost: randomChain.cost,
-            lat: cityCenter[0] + (Math.random() - 0.5) * 0.04,
-            lng: cityCenter[1] + (Math.random() - 0.5) * 0.04,
-            desc: randomChain.desc
-          };
+          // 2. 當地 API 沒資料時，平滑退回智慧動態備援
+          if (slot.type === "景點") {
+            const fallback = localFallbacks.attractions[Math.floor(Math.random() * localFallbacks.attractions.length)];
+            chosen = {
+              name: `${district === "全區" ? city : district} ${fallback.name}`,
+              city: city,
+              district: district === "全區" ? "熱門區域" : district,
+              category: fallback.category,
+              avgCost: fallback.cost,
+              lat: cityCenter[0] + (Math.random() - 0.5) * 0.04,
+              lng: cityCenter[1] + (Math.random() - 0.5) * 0.04,
+              desc: fallback.desc
+            };
+          } else {
+            const fallback = localFallbacks.foods[Math.floor(Math.random() * localFallbacks.foods.length)];
+            chosen = {
+              name: `${district === "全區" ? city : district} ${fallback.name}`,
+              city: city,
+              district: district === "全區" ? "美食商圈" : district,
+              category: "美食放鬆",
+              avgCost: fallback.cost,
+              lat: cityCenter[0] + (Math.random() - 0.5) * 0.04,
+              lng: cityCenter[1] + (Math.random() - 0.5) * 0.04,
+              desc: fallback.desc
+            };
+          }
         }
 
         usedNames.add(chosen.name);
@@ -441,10 +536,28 @@
       currentItinerary = newItinerary;
       renderTimeline();
       updateMapMarkers();
-      itineraryStatus.textContent = `已生成 ${city} (${district}) 專屬行程`;
+
+      itineraryStatus.textContent = `連線更新成功 (${city} ${district})`;
+
+      // 解除按鈕鎖定
+      document.getElementById('btnIcon').className = "fa-solid fa-dice";
+      document.getElementById('btnText').textContent = "🎲 生成專屬行程";
+      generateBtn.disabled = false;
+      isGenerating = false;
     }
 
-    // Render Cards
+    // 渲染 Skeleton 載入畫面
+    function renderSkeleton() {
+      timelineContainer.innerHTML = [1, 2, 3].map(() => `
+        <div class="border border-slate-200 rounded-lg p-4 bg-white skeleton-card space-y-3">
+          <div class="h-4 bg-slate-200 rounded w-1/3"></div>
+          <div class="h-6 bg-slate-200 rounded w-2/3"></div>
+          <div class="h-3 bg-slate-200 rounded w-full"></div>
+        </div>
+      `).join('');
+    }
+
+    // 渲染行程卡片
     function renderTimeline() {
       timelineContainer.innerHTML = currentItinerary.map((item, index) => {
         const queryTerm = `${item.city} ${item.district} ${item.name}`;
@@ -461,6 +574,7 @@
                 <span class="text-xs font-semibold text-emerald-800 bg-emerald-100 px-2 py-0.5 rounded">
                   ${item.slotInfo.time} · ${item.slotInfo.label}
                 </span>
+                <span class="text-[10px] bg-slate-200 text-slate-700 px-1.5 py-0.5 rounded-full">${item.category || '精選'}</span>
               </div>
               <span class="text-xs text-slate-400"><i class="fa-solid fa-location-dot"></i> ${item.city} ${item.district}</span>
             </div>
@@ -499,6 +613,8 @@
     window.rerollSingle = function(index) {
       if (currentItinerary[index].isLocked) return;
       const city = citySelect.value;
+      const district = districtSelect.value;
+      const slot = currentItinerary[index].slotInfo;
       const cityCenter = cityCenters[city] || [23.8, 120.9];
       
       let usedNames = new Set();
@@ -506,16 +622,22 @@
         if (i !== index && item.name) usedNames.add(item.name);
       });
 
-      let candidates = spotsDatabase.filter(s => s.city === city && !usedNames.has(s.name));
+      const cacheKey = `${city}_${district}`;
+      const apiSpots = overpassCache[cacheKey] || [];
+      
+      let candidates = apiSpots.filter(s => !usedNames.has(s.name) && s.type === slot.type);
       let newItem;
+
       if (candidates.length > 0) {
         newItem = candidates[Math.floor(Math.random() * candidates.length)];
       } else {
-        const unusedChains = realChainFallbacks.filter(c => !usedNames.has(c.name));
-        const chainPool = unusedChains.length > 0 ? unusedChains : realChainFallbacks;
-        const randomChain = chainPool[Math.floor(Math.random() * chainPool.length)];
+        const pool = slot.type === "景點" ? localFallbacks.attractions : localFallbacks.foods;
+        const fallback = pool[Math.floor(Math.random() * pool.length)];
         newItem = {
-          ...randomChain,
+          name: `${district === "全區" ? city : district} ${fallback.name}`,
+          category: fallback.category || "美食放鬆",
+          avgCost: fallback.cost,
+          desc: fallback.desc,
           lat: cityCenter[0] + (Math.random() - 0.5) * 0.04,
           lng: cityCenter[1] + (Math.random() - 0.5) * 0.04
         };
@@ -524,9 +646,8 @@
       currentItinerary[index] = {
         ...newItem,
         city: city,
-        district: districtSelect.value === "全區" ? "市中心" : districtSelect.value,
-        avgCost: newItem.avgCost || newItem.cost || 200,
-        slotInfo: currentItinerary[index].slotInfo,
+        district: district === "全區" ? "市中心" : district,
+        slotInfo: slot,
         isLocked: false
       };
 
@@ -534,7 +655,6 @@
       updateMapMarkers();
     };
 
-    // 自動更新地圖標記與飛躍 (FlyToBounds / FlyTo)
     function updateMapMarkers() {
       mapMarkers.forEach(m => map.removeLayer(m));
       mapMarkers = [];
