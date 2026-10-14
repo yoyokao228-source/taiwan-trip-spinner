@@ -1,0 +1,385 @@
+/**
+ * 主應用程式邏輯 (App Controller, Spatial Sorting & UI Manager)
+ */
+let selectedTags = new Set();
+let currentItinerary = [];
+let map = null;
+let mapMarkers = [];
+
+// DOM 元素引用
+let citySelect, districtSelect, budgetSlider, budgetValue, generateBtn, timelineContainer, itineraryStatus, preloadStatusDot, preloadStatusText;
+
+document.addEventListener('DOMContentLoaded', () => {
+  citySelect = document.getElementById('citySelect');
+  districtSelect = document.getElementById('districtSelect');
+  budgetSlider = document.getElementById('budgetSlider');
+  budgetValue = document.getElementById('budgetValue');
+  generateBtn = document.getElementById('generateBtn');
+  timelineContainer = document.getElementById('timelineContainer');
+  itineraryStatus = document.getElementById('itineraryStatus');
+  preloadStatusDot = document.getElementById('preloadStatusDot');
+  preloadStatusText = document.getElementById('preloadStatusText');
+
+  initCitySelect();
+  initMap();
+  bindEvents();
+
+  // 初始化預載第一個縣市
+  if (citySelect && citySelect.value) {
+    fetchOSMData(citySelect.value, districtSelect.value, updatePreloadUI);
+  }
+});
+
+/**
+ * 初始化縣市選單
+ */
+function initCitySelect() {
+  if (typeof districtGeoMap === 'undefined') return;
+  citySelect.innerHTML = Object.keys(districtGeoMap).map(city => `<option value="${city}">${city}</option>`).join('');
+  updateDistricts();
+}
+
+/**
+ * 連動更新鄉鎮選單
+ */
+function updateDistricts() {
+  const city = citySelect.value;
+  const cityData = districtGeoMap[city];
+  const districts = cityData ? ["全區", ...Object.keys(cityData.districts)] : ["全區"];
+  districtSelect.innerHTML = districts.map(d => `<option value="${d}">${d}</option>`).join('');
+}
+
+/**
+ * 初始化 Leaflet 地圖
+ */
+function initMap() {
+  map = L.map('map').setView([25.0330, 121.5654], 12);
+  L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}', {
+    attribution: 'Tiles &copy; Esri &mdash; Source: Esri, USGS',
+    maxZoom: 18
+  }).addTo(map);
+}
+
+/**
+ * 綁定 UI 操作事件
+ */
+function bindEvents() {
+  citySelect.addEventListener('change', () => {
+    updateDistricts();
+    fetchOSMData(citySelect.value, districtSelect.value, updatePreloadUI);
+  });
+
+  districtSelect.addEventListener('change', () => {
+    fetchOSMData(citySelect.value, districtSelect.value, updatePreloadUI);
+  });
+
+  budgetSlider.addEventListener('input', (e) => {
+    budgetValue.textContent = `NT$ ${Number(e.target.value).toLocaleString()}`;
+  });
+
+  document.getElementById('tagContainer').addEventListener('click', (e) => {
+    if (e.target.classList.contains('tag-btn')) {
+      const tag = e.target.dataset.tag;
+      if (selectedTags.has(tag)) {
+        selectedTags.delete(tag);
+        e.target.classList.remove('bg-emerald-600', 'text-white');
+        e.target.classList.add('bg-slate-50');
+      } else {
+        selectedTags.add(tag);
+        e.target.classList.add('bg-emerald-600', 'text-white');
+        e.target.classList.remove('bg-slate-50');
+      }
+    }
+  });
+
+  generateBtn.addEventListener('click', handleGenerate);
+}
+
+function updatePreloadUI(isReady, text) {
+  if (preloadStatusText && preloadStatusDot) {
+    preloadStatusText.textContent = text;
+    preloadStatusDot.className = isReady ? "w-2 h-2 rounded-full bg-emerald-300" : "w-2 h-2 rounded-full bg-amber-300 animate-pulse";
+  }
+}
+
+/**
+ * 空間距離順暢排序演算法 (Nearest Neighbor Distance Sorting)
+ */
+function sortItineraryByDistance(items) {
+  if (items.length <= 1) return items;
+
+  let result = [];
+  let unvisited = [...items];
+
+  let current = unvisited.shift();
+  result.push(current);
+
+  while (unvisited.length > 0) {
+    let nearestIndex = 0;
+    let minDist = Infinity;
+
+    for (let i = 0; i < unvisited.length; i++) {
+      let dist = calculateDistance(current.lat, current.lng, unvisited[i].lat, unvisited[i].lng);
+      if (dist < minDist) {
+        minDist = dist;
+        nearestIndex = i;
+      }
+    }
+
+    current = unvisited.splice(nearestIndex, 1)[0];
+    result.push(current);
+  }
+
+  return result.map((item, index) => ({
+    ...item,
+    slotInfo: items[index].slotInfo
+  }));
+}
+
+function calculateDistance(lat1, lon1, lat2, lon2) {
+  const R = 6371; // 地球半徑 (km)
+  const dLat = (lat2 - lat1) * Math.PI / 180;
+  const dLon = (lon2 - lon1) * Math.PI / 180;
+  const a = Math.sin(dLat/2) * Math.sin(dLat/2) +
+            Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+            Math.sin(dLon/2) * Math.sin(dLon/2);
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+}
+
+/**
+ * 核心行程生成流程
+ */
+async function handleGenerate() {
+  const city = citySelect.value;
+  const district = districtSelect.value;
+  const isRain = document.getElementById('toggleRain').checked;
+  const isGym = document.getElementById('toggleGym').checked;
+  const pace = Number(document.getElementById('paceSelect').value);
+  const isMonday = (new Date().getDay() === 1);
+
+  document.getElementById('btnIcon').className = "fa-solid fa-spinner animate-spin";
+  document.getElementById('btnText').textContent = "檢索中...";
+  generateBtn.disabled = true;
+
+  // 1. 取得 OSM 實時點位
+  let apiSpots = await fetchOSMData(city, district, updatePreloadUI);
+
+  const timeSlots5 = [
+    { time: "09:00 - 10:30", label: "早晨探索", type: "景點", isNightSlot: false },
+    { time: "11:30 - 13:00", label: "午餐時間", type: "美食", isNightSlot: false },
+    { time: "14:00 - 16:30", label: "下午體驗", type: "景點", isNightSlot: false },
+    { time: "18:00 - 19:30", label: "晚餐時間", type: "美食", isNightSlot: true },
+    { time: "20:00 - 21:30", label: "夜間體驗", type: "景點", isNightSlot: true }
+  ];
+
+  const timeSlots3 = [
+    { time: "11:30 - 13:00", label: "午餐時間", type: "美食", isNightSlot: false },
+    { time: "14:00 - 17:00", label: "下午精彩體驗", type: "景點", isNightSlot: false },
+    { time: "18:30 - 20:30", label: "晚餐時間", type: "美食", isNightSlot: true }
+  ];
+
+  const slots = pace === 5 ? timeSlots5 : timeSlots3;
+  let rawSelectedSpots = [];
+  let usedNames = new Set();
+
+  slots.forEach((slot, index) => {
+    if (currentItinerary[index] && currentItinerary[index].isLocked) {
+      usedNames.add(currentItinerary[index].name);
+    }
+  });
+
+  // 嚴格縣市隔離備援池：僅限當前選擇之縣市
+  const cityStrictFallbackPool = (typeof REAL_VENUES_DB !== 'undefined') ? REAL_VENUES_DB.filter(v => v.city === city) : [];
+
+  slots.forEach((slot, index) => {
+    if (currentItinerary[index] && currentItinerary[index].isLocked) {
+      rawSelectedSpots.push(currentItinerary[index]);
+      return;
+    }
+
+    // 1階比對：API 實時點位
+    let candidates = (apiSpots || []).filter(s => {
+      if (usedNames.has(s.name)) return false;
+      if (s.type !== slot.type) return false;
+      if (isRain && !s.isIndoor) return false;
+      if (isGym && slot.type === "景點" && !s.isGymFriendly) return false;
+      if (isMonday && s.mondayOff) return false;
+      if (!slot.isNightSlot && s.nightOnly) return false;
+      return true;
+    });
+
+    let chosen = null;
+    if (candidates.length > 0) {
+      chosen = candidates[Math.floor(Math.random() * candidates.length)];
+    } else {
+      // 2階降級：同縣市備援庫
+      const fallbackCandidates = cityStrictFallbackPool.filter(p => {
+        if (usedNames.has(p.name)) return false;
+        if (p.type !== slot.type) return false;
+        if (isRain && !p.isIndoor) return false;
+        if (isMonday && p.mondayOff) return false;
+        if (!slot.isNightSlot && p.nightOnly) return false;
+        return true;
+      });
+
+      if (fallbackCandidates.length > 0) {
+        chosen = fallbackCandidates[Math.floor(Math.random() * fallbackCandidates.length)];
+      } else if (cityStrictFallbackPool.length > 0) {
+        chosen = cityStrictFallbackPool[Math.floor(Math.random() * cityStrictFallbackPool.length)];
+      } else {
+        const center = getQueryCenter(city, district);
+        chosen = {
+          name: `${city}${district === "全區" ? "在地" : district}特色景點`,
+          city: city,
+          district: district === "全區" ? "商圈" : district,
+          category: "在地體驗",
+          avgCost: 150,
+          lat: center[0] + (Math.random() - 0.5) * 0.01,
+          lng: center[1] + (Math.random() - 0.5) * 0.01,
+          desc: "在地嚴選點位，建議點擊地圖與搜尋按鈕獲取詳細營業資訊。"
+        };
+      }
+    }
+
+    usedNames.add(chosen.name);
+    rawSelectedSpots.push({ ...chosen, slotInfo: slot, isLocked: false });
+  });
+
+  // 空間距離順暢度排序
+  currentItinerary = sortItineraryByDistance(rawSelectedSpots);
+  
+  renderTimeline();
+  updateMapMarkers();
+
+  itineraryStatus.textContent = `生成成功 (${city} ${district})`;
+
+  document.getElementById('btnIcon').className = "fa-solid fa-dice";
+  document.getElementById('btnText').textContent = "🎲 生成專屬行程";
+  generateBtn.disabled = false;
+}
+
+/**
+ * 渲染行程時間軸 UI
+ */
+function renderTimeline() {
+  timelineContainer.innerHTML = currentItinerary.map((item, index) => {
+    const queryTerm = `${item.city} ${item.district} ${item.name}`;
+    const googleMapUrl = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(queryTerm)}`;
+    const searchUrl = `https://www.google.com/search?q=${encodeURIComponent(queryTerm + " 營業時間 門票")}`;
+
+    return `
+      <div class="border border-slate-200 rounded-lg p-4 bg-slate-50/50 hover:bg-white hover:shadow-md transition relative">
+        <div class="flex items-center justify-between mb-2">
+          <div class="flex items-center gap-2">
+            <span class="w-6 h-6 rounded-full bg-emerald-600 text-white font-bold text-xs flex items-center justify-center">
+              ${index + 1}
+            </span>
+            <span class="text-xs font-semibold text-emerald-800 bg-emerald-100 px-2 py-0.5 rounded">
+              ${item.slotInfo.time} · ${item.slotInfo.label}
+            </span>
+            <span class="text-[10px] bg-slate-200 text-slate-700 px-1.5 py-0.5 rounded-full">${item.category || '精選'}</span>
+          </div>
+          <span class="text-xs text-slate-400"><i class="fa-solid fa-location-dot"></i> ${item.city} ${item.district}</span>
+        </div>
+
+        <h3 class="font-bold text-slate-900 text-base mb-1">${item.name}</h3>
+        <p class="text-xs text-slate-600 mb-3">${item.desc}</p>
+
+        <div class="flex flex-wrap items-center justify-between gap-2 border-t border-slate-200 pt-3 text-xs">
+          <span class="font-medium text-slate-700">預估費用: <strong class="text-emerald-600">約 NT$ ${item.avgCost}</strong></span>
+          
+          <div class="flex items-center gap-2">
+            <button onclick="toggleLock(${index})" class="px-2.5 py-1 rounded border text-xs font-medium transition ${item.isLocked ? 'bg-amber-100 border-amber-300 text-amber-800' : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-100'}">
+              ${item.isLocked ? '<i class="fa-solid fa-lock"></i> 已鎖定' : '<i class="fa-solid fa-lock-open"></i> 鎖定'}
+            </button>
+            <button onclick="rerollSingle(${index})" class="px-2.5 py-1 bg-white border border-slate-200 text-slate-600 rounded text-xs font-medium hover:bg-slate-100">
+              <i class="fa-solid fa-rotate"></i> 重抽
+            </button>
+            <a href="${googleMapUrl}" target="_blank" class="px-2.5 py-1 bg-blue-50 border border-blue-200 text-blue-700 rounded text-xs font-medium hover:bg-blue-100">
+              <i class="fa-solid fa-map-pin"></i> Google 地圖
+            </a>
+            <a href="${searchUrl}" target="_blank" class="px-2.5 py-1 bg-slate-100 text-slate-700 rounded text-xs font-medium hover:bg-slate-200">
+              <i class="fa-solid fa-magnifying-glass"></i> 查活動
+            </a>
+          </div>
+        </div>
+      </div>
+    `;
+  }).join('');
+}
+
+window.toggleLock = function(index) {
+  currentItinerary[index].isLocked = !currentItinerary[index].isLocked;
+  renderTimeline();
+};
+
+window.rerollSingle = function(index) {
+  if (currentItinerary[index].isLocked) return;
+  const city = citySelect.value;
+  const district = districtSelect.value;
+  const slot = currentItinerary[index].slotInfo;
+  
+  let usedNames = new Set();
+  currentItinerary.forEach((item, i) => {
+    if (i !== index && item.name) usedNames.add(item.name);
+  });
+
+  const cacheKey = `${city}_${district}`;
+  const apiSpots = overpassCache[cacheKey] || [];
+  let candidates = apiSpots.filter(s => !usedNames.has(s.name) && s.type === slot.type);
+  let newItem;
+
+  if (candidates.length > 0) {
+    newItem = candidates[Math.floor(Math.random() * candidates.length)];
+  } else {
+    const cityPool = (typeof REAL_VENUES_DB !== 'undefined') ? REAL_VENUES_DB.filter(v => v.city === city && v.type === slot.type && !usedNames.has(v.name)) : [];
+    newItem = cityPool.length > 0 ? cityPool[Math.floor(Math.random() * cityPool.length)] : {
+      name: `${city}特色景點`, city: city, district: district, category: "精選", avgCost: 150, lat: 25.033, lng: 121.565, desc: "在地點位"
+    };
+  }
+
+  currentItinerary[index] = {
+    ...newItem,
+    slotInfo: slot,
+    isLocked: false
+  };
+
+  renderTimeline();
+  updateMapMarkers();
+};
+
+/**
+ * 更新 Leaflet 地圖標記與視野
+ */
+function updateMapMarkers() {
+  mapMarkers.forEach(m => map.removeLayer(m));
+  mapMarkers = [];
+  let bounds = [];
+
+  currentItinerary.forEach((spot, idx) => {
+    if (spot.lat && spot.lng) {
+      const customIcon = L.divIcon({
+        className: 'custom-div-icon',
+        html: `<div class="custom-marker">${idx + 1}</div>`,
+        iconSize: [30, 30],
+        iconAnchor: [15, 15]
+      });
+
+      const marker = L.marker([spot.lat, spot.lng], { icon: customIcon })
+        .addTo(map)
+        .bindPopup(`<b>${idx + 1}. ${spot.name}</b><br>${spot.city} ${spot.district}`);
+      
+      mapMarkers.push(marker);
+      bounds.push([spot.lat, spot.lng]);
+    }
+  });
+
+  if (bounds.length > 0) {
+    map.flyToBounds(bounds, { padding: [50, 50], maxZoom: 15, duration: 1.2 });
+  } else {
+    const city = citySelect.value;
+    const district = districtSelect.value;
+    const center = getQueryCenter(city, district);
+    map.flyTo(center, 12, { duration: 1.2 });
+  }
+}
