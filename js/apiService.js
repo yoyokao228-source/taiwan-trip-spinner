@@ -1,5 +1,5 @@
 /**
- * 實時探索服務 (逐格時段標的連線服務 - Targeted Slot-by-Slot Discovery)
+ * 實時探索服務 (逐格時段標的連線服務 - Seamless Clean Version)
  */
 window.overpassCache = {};
 window.localJsonCache = {};
@@ -25,17 +25,12 @@ window.getQueryCenter = function(city, district) {
   return cityInfo.center;
 };
 
-/**
- * 根據特定時段需求 (Slot) 產出精準的輕量化 Overpass 查詢語法
- */
 function buildTargetedQuery(slot, searchRadius, lat, lng) {
   if (slot.isMeal) {
-    // 正餐時段：專精抓取餐廳、快餐、地方美食
     return `(
       node["amenity"~"restaurant|fast_food|food_court"]["name"](around:${searchRadius},${lat},${lng});
     );`;
   } else if (slot.time && slot.time.includes("14:00")) {
-    // 下午體驗：專精獨立咖啡館、風格甜點、藝文展覽館、自然公園
     return `(
       node["amenity"="cafe"]["name"](around:${searchRadius},${lat},${lng});
       node["tourism"~"museum|gallery|attraction"]["name"](around:${searchRadius},${lat},${lng});
@@ -43,14 +38,12 @@ function buildTargetedQuery(slot, searchRadius, lat, lng) {
       node["leisure"="park"]["name"](around:${searchRadius},${lat},${lng});
     );`;
   } else if (slot.time && slot.time.includes("20:00")) {
-    // 夜間體驗：酒吧、夜景、影城、密室、深夜咖啡
     return `(
       node["amenity"~"pub|bar|cinema|cafe"]["name"](around:${searchRadius},${lat},${lng});
       node["tourism"="viewpoint"]["name"](around:${searchRadius},${lat},${lng});
       node["leisure"~"bowling_alley|sports_centre"]["name"](around:${searchRadius},${lat},${lng});
     );`;
   } else {
-    // 一般早晨景點
     return `(
       node["tourism"~"attraction|museum|viewpoint"]["name"](around:${searchRadius},${lat},${lng});
       node["leisure"~"park|sports_centre"]["name"](around:${searchRadius},${lat},${lng});
@@ -58,7 +51,6 @@ function buildTargetedQuery(slot, searchRadius, lat, lng) {
   }
 }
 
-// 單一輕量請求 (10 秒逾時)
 async function fetchEndpointSlot(endpoint, queryBody, timeoutMs = 10000) {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
@@ -82,15 +74,11 @@ async function fetchEndpointSlot(endpoint, queryBody, timeoutMs = 10000) {
   }
 }
 
-/**
- * 專為特定單一 Slot 發起 12 通道實時探索
- */
 window.fetchSlotDataLive = async function(city, district, slot, timeoutMs = 10000) {
   const center = window.getQueryCenter(city, district);
   const searchRadius = district === "全區" ? 5000 : 3500;
   const queryBody = buildTargetedQuery(slot, searchRadius, center[0], center[1]);
 
-  // 6 節點平行對此 Slot 發起請求
   const tasks = LIVE_API_ENDPOINTS.map(endpoint => fetchEndpointSlot(endpoint, queryBody, timeoutMs));
 
   const results = await Promise.allSettled(tasks);
@@ -168,7 +156,7 @@ function parseOverpassElements(elements, city, district) {
       lat: el.lat,
       lng: el.lon,
       isLive: true,
-      desc: tags.description || tags.note || `實時線上發現之在地真實地點`
+      desc: tags.description || tags.note || "" // 絕不設定任何預設罐頭文字
     });
   });
 
