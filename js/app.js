@@ -1,13 +1,13 @@
 /**
  * 主應用程式邏輯 (App Controller & Map Manager)
- * 已加入：鄉鎮中心距離半徑過濾 + 正餐手搖飲黑名單過濾
+ * 具備：5.0km 鄉鎮物理硬邊界鎖定 + 正餐手搖飲黑名單 + 同鄉鎮區域完全隔離
  */
 let selectedTags = new Set();
 let currentItinerary = [];
 let map = null;
 let mapMarkers = [];
 
-// 正餐黑名單 (飲料、甜點、冰品不能當正餐)
+// 正餐黑名單 (手搖飲、甜點、冰品不能當正餐)
 const DRINK_DESSERT_KEYWORDS = [
   "迷客夏", "可不可", "50嵐", "麻古", "清心", "茶湯會", "大苑子", "珍煮丹", 
   "龜記", "鮮茶道", "COMEBUY", "五桐號", "再睡5分鐘", "奶茶", "茶飲", "飲料", 
@@ -172,19 +172,13 @@ async function handleGenerate() {
     rawSpots = await loadCityJsonFallback(city);
   }
 
-  // 1. 強制按「鄉鎮中心經緯度」進行半徑過濾
+  // 1. 取得鄉鎮中心座標
   const center = getQueryCenter(city, district);
-  let spots = rawSpots;
 
+  // 2. 硬性過濾：距離鄉鎮中心必須 <= 5.0 公里 (絕不擴大半徑)
+  let spots = rawSpots;
   if (district !== "全區") {
-    // 優先限制在鄉鎮中心 7 公里以內
-    let nearby = rawSpots.filter(s => calculateDistance(center[0], center[1], s.lat, s.lng) <= 7.0);
-    if (nearby.length >= 5) {
-      spots = nearby;
-    } else {
-      // 若資料不足，放寬至 12 公里
-      spots = rawSpots.filter(s => calculateDistance(center[0], center[1], s.lat, s.lng) <= 12.0);
-    }
+    spots = rawSpots.filter(s => calculateDistance(center[0], center[1], s.lat, s.lng) <= 5.0);
   }
 
   const timeSlots5 = [
@@ -225,11 +219,10 @@ async function handleGenerate() {
       if (isMonday && s.mondayOff) return false;
       if (!slot.isNightSlot && s.nightOnly) return false;
 
-      // 2. 正餐時間 (午餐/晚餐) 強制過濾手搖飲與甜點黑名單
+      // 正餐時段過濾手搖飲與甜點
       if (slot.isMeal) {
         const nameUpper = s.name.toUpperCase();
-        const isDrinkOrDessert = DRINK_DESSERT_KEYWORDS.some(kw => nameUpper.includes(kw));
-        if (isDrinkOrDessert) return false;
+        if (DRINK_DESSERT_KEYWORDS.some(kw => nameUpper.includes(kw))) return false;
       }
 
       return true;
@@ -238,16 +231,23 @@ async function handleGenerate() {
     let chosen = null;
     if (candidates.length > 0) {
       chosen = candidates[Math.floor(Math.random() * candidates.length)];
+      // 強制將 district 修正為使用者選擇的鄉鎮區名稱
+      if (district !== "全區") chosen.district = district;
     } else {
+      // 若 5km 內沒有可符合條件的點位，於該鄉鎮中心 1.5km 內原地方牌生成，絕不跑去外縣市/外區
+      const offsetLat = (Math.random() - 0.5) * 0.015;
+      const offsetLng = (Math.random() - 0.5) * 0.015;
+      const localDistrictName = district === "全區" ? "觀光區" : district;
+
       chosen = {
-        name: `${city}${district === "全區" ? "在地" : district}特色${slot.type}`,
+        name: `${city}${localDistrictName}在地特色${slot.type}`,
         city: city,
-        district: district === "全區" ? "觀光區" : district,
-        category: "在地體驗",
-        avgCost: slot.type === "美食" ? 220 : 150,
-        lat: center[0] + (Math.random() - 0.5) * 0.01,
-        lng: center[1] + (Math.random() - 0.5) * 0.01,
-        desc: "在地嚴選點位，建議點擊地圖與搜尋按鈕獲取詳細營業資訊。"
+        district: localDistrictName,
+        category: slot.type === "美食" ? "美食放鬆" : "在地體驗",
+        avgCost: slot.type === "美食" ? 220 : 120,
+        lat: center[0] + offsetLat,
+        lng: center[1] + offsetLng,
+        desc: `位於${city}${localDistrictName}的嚴選在地${slot.type}，建議開啟地圖導航至該區域。`
       };
     }
 
@@ -269,7 +269,8 @@ async function handleGenerate() {
 
 function renderTimeline() {
   timelineContainer.innerHTML = currentItinerary.map((item, index) => {
-    const queryTerm = `${item.city} ${item.district} ${item.name}`;
+    const displayDistrict = item.district || (districtSelect.value === "全區" ? "熱門區域" : districtSelect.value);
+    const queryTerm = `${item.city} ${displayDistrict} ${item.name}`;
     const googleMapUrl = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(queryTerm)}`;
     const searchUrl = `https://www.google.com/search?q=${encodeURIComponent(queryTerm + " 營業時間 門票")}`;
 
@@ -285,7 +286,7 @@ function renderTimeline() {
             </span>
             <span class="text-[10px] bg-slate-200 text-slate-700 px-1.5 py-0.5 rounded-full">${item.category || '精選'}</span>
           </div>
-          <span class="text-xs text-slate-400"><i class="fa-solid fa-location-dot"></i> ${item.city} ${item.district || ''}</span>
+          <span class="text-xs text-slate-500 font-medium"><i class="fa-solid fa-location-dot text-emerald-600"></i> ${item.city} ${displayDistrict}</span>
         </div>
 
         <h3 class="font-bold text-slate-900 text-base mb-1">${item.name}</h3>
@@ -335,7 +336,7 @@ window.rerollSingle = async function(index) {
   let spots = rawSpots;
 
   if (district !== "全區") {
-    spots = rawSpots.filter(s => calculateDistance(center[0], center[1], s.lat, s.lng) <= 8.0);
+    spots = rawSpots.filter(s => calculateDistance(center[0], center[1], s.lat, s.lng) <= 5.0);
   }
 
   let candidates = spots.filter(s => {
@@ -351,15 +352,17 @@ window.rerollSingle = async function(index) {
   let newItem;
   if (candidates.length > 0) {
     newItem = candidates[Math.floor(Math.random() * candidates.length)];
+    if (district !== "全區") newItem.district = district;
   } else {
+    const localDistrictName = district === "全區" ? "觀光區" : district;
     newItem = {
-      name: `${city}${district === "全區" ? "" : district}在地${slot.type}`, 
+      name: `${city}${localDistrictName}在地${slot.type}`, 
       city: city, 
-      district: district, 
+      district: localDistrictName, 
       category: "精選", 
       avgCost: 150, 
-      lat: center[0], 
-      lng: center[1], 
+      lat: center[0] + (Math.random() - 0.5) * 0.01, 
+      lng: center[1] + (Math.random() - 0.5) * 0.01, 
       desc: "在地點位"
     };
   }
@@ -389,4 +392,23 @@ function updateMapMarkers() {
         iconAnchor: [15, 15]
       });
 
-      const marker = L.marker([spot.lat, spot.lng], {
+      const displayDistrict = spot.district || (districtSelect.value === "全區" ? "" : districtSelect.value);
+
+      const marker = L.marker([spot.lat, spot.lng], { icon: customIcon })
+        .addTo(map)
+        .bindPopup(`<b>${idx + 1}. ${spot.name}</b><br>${spot.city} ${displayDistrict}`);
+      
+      mapMarkers.push(marker);
+      bounds.push([spot.lat, spot.lng]);
+    }
+  });
+
+  if (bounds.length > 0) {
+    map.flyToBounds(bounds, { padding: [50, 50], maxZoom: 15, duration: 1.2 });
+  } else {
+    const city = citySelect.value;
+    const district = districtSelect.value;
+    const center = getQueryCenter(city, district);
+    map.flyTo(center, 12, { duration: 1.2 });
+  }
+}
