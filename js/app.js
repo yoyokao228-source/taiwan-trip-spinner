@@ -1,6 +1,6 @@
 /**
  * 主應用程式邏輯 (App Controller & Map Manager)
- * 已寫入：備援資料庫配額限制 (5項限2，3項限1) + 30+ 併發矩陣對接
+ * 具備：切換縣市無限預載 + 生成 10 秒 12 通道發射 + 逐格獨立實時檢索/逐項降級備援
  */
 let selectedTags = new Set();
 let currentItinerary = [];
@@ -28,7 +28,9 @@ document.addEventListener('DOMContentLoaded', () => {
   bindEvents();
 
   if (citySelect && citySelect.value) {
-    fetchOSMData(citySelect.value, districtSelect.value, updatePreloadUI);
+    // 預載模式 (isPreload = true)，無時間上限慢慢查
+    fetchOSMData(citySelect.value, districtSelect.value, updatePreloadUI, true);
+    loadCityJsonFallback(citySelect.value);
   }
 });
 
@@ -61,13 +63,15 @@ function bindEvents() {
   if (citySelect) {
     citySelect.addEventListener('change', () => {
       updateDistricts();
-      fetchOSMData(citySelect.value, districtSelect.value, updatePreloadUI);
+      // 預載模式，不限制逾時時間
+      fetchOSMData(citySelect.value, districtSelect.value, updatePreloadUI, true);
+      loadCityJsonFallback(citySelect.value);
     });
   }
 
   if (districtSelect) {
     districtSelect.addEventListener('change', () => {
-      fetchOSMData(citySelect.value, districtSelect.value, updatePreloadUI);
+      fetchOSMData(citySelect.value, districtSelect.value, updatePreloadUI, true);
     });
   }
 
@@ -184,21 +188,31 @@ async function handleGenerate() {
   const district = districtSelect.value;
   const pace = Number(document.getElementById('paceSelect').value);
 
-  document.getElementById('btnIcon').className = "fa-solid fa-bolt animate-spin";
-  document.getElementById('btnText').textContent = "30+管道連線中...";
+  document.getElementById('btnIcon').className = "fa-solid fa-wifi animate-spin";
+  document.getElementById('btnText').textContent = "12通道實時搜尋中...";
   generateBtn.disabled = true;
 
-  let rawSpots = await fetchOSMData(city, district, updatePreloadUI);
-  const center = getQueryCenter(city, district);
-  let allEnrichedSpots = rawSpots.map(s => enrichSpotMetadata(s));
+  // 1. 搜尋發射：10 秒極限連線，12 通道平行抓取
+  let liveSpots = await fetchOSMData(city, district, updatePreloadUI, false);
+  
+  // 2. 隨時準備該縣市的靜態 JSON 以備單項降級
+  let backupSpots = await loadCityJsonFallback(city);
 
-  // 距離與分區過濾
-  let districtSpots = allEnrichedSpots;
+  const center = getQueryCenter(city, district);
+
+  let liveEnriched = (liveSpots || []).map(s => enrichSpotMetadata({ ...s, isLive: true }));
+  let backupEnriched = (backupSpots || []).map(s => enrichSpotMetadata({ ...s, isLive: false }));
+
+  // 分區邊界過濾
   if (district !== "全區") {
-    districtSpots = allEnrichedSpots.filter(s => {
+    liveEnriched = liveEnriched.filter(s => {
       const matchText = (s.district && s.district.includes(district)) || (s.name && s.name.includes(district));
-      const dist = calculateDistance(center[0], center[1], s.lat, s.lng);
-      return matchText || dist <= 5.0;
+      return matchText || calculateDistance(center[0], center[1], s.lat, s.lng) <= 5.0;
+    });
+
+    backupEnriched = backupEnriched.filter(s => {
+      const matchText = (s.district && s.district.includes(district)) || (s.name && s.name.includes(district));
+      return matchText || calculateDistance(center[0], center[1], s.lat, s.lng) <= 5.0;
     });
   }
 
@@ -217,27 +231,24 @@ async function handleGenerate() {
   ];
 
   const slots = pace === 5 ? timeSlots5 : timeSlots3;
-  const maxFallbackAllowed = pace === 5 ? 2 : 1; // 硬性規定備援資料庫配額上限
-  let currentFallbackUsed = 0;
-
   let rawSelectedSpots = [];
   let usedNames = new Set();
 
   slots.forEach((slot, index) => {
     if (currentItinerary[index] && currentItinerary[index].isLocked) {
       usedNames.add(currentItinerary[index].name);
-      if (currentItinerary[index].isLive === false) currentFallbackUsed++;
     }
   });
 
+  // 3. 逐格 (Slot-by-Slot) 獨立核對與補牌
   slots.forEach((slot, index) => {
     if (currentItinerary[index] && currentItinerary[index].isLocked) {
       rawSelectedSpots.push(currentItinerary[index]);
       return;
     }
 
-    // 篩選基礎候選者
-    let baseCandidates = districtSpots.filter(s => {
+    // A. 優先嘗試從「實時線上點位」尋找該格符合的項目
+    let liveCandidates = liveEnriched.filter(s => {
       if (usedNames.has(s.name)) return false;
       if (s.type !== slot.type) return false;
       if (slot.type === "景點" && s.isBlacklistedAttraction) return false;
@@ -248,35 +259,30 @@ async function handleGenerate() {
       return true;
     });
 
-    if (baseCandidates.length === 0) {
-      baseCandidates = districtSpots.filter(s => s.type === slot.type && (!slot.isMeal || !s.isDrinkOrDessert));
-    }
-
-    if (baseCandidates.length === 0) {
-      baseCandidates = allEnrichedSpots.filter(s => s.type === slot.type);
-    }
-
-    // 🔥 實施備援配額限制 (優先選實時點位；只有配額允許時才允許挑備援)
-    let liveCandidates = baseCandidates.filter(s => s.isLive !== false);
-    let fallbackCandidates = baseCandidates.filter(s => s.isLive === false);
-
     let chosen = null;
 
     if (liveCandidates.length > 0) {
-      // 1. 優先挑選實時連線點位
+      // ✅ 該格成功獲得「實時線上發現」地點
       chosen = liveCandidates[Math.floor(Math.random() * liveCandidates.length)];
-    } else if (fallbackCandidates.length > 0 && currentFallbackUsed < maxFallbackAllowed) {
-      // 2. 實時點位不夠，且備援使用次數「未達上限」時，才允許使用備援
-      chosen = fallbackCandidates[Math.floor(Math.random() * fallbackCandidates.length)];
-      currentFallbackUsed++;
     } else {
-      // 3. 備援已達上限，強制從全局「實時點位庫」中重複抽選，確保絕不超過備援配額
-      let globalLive = allEnrichedSpots.filter(s => s.isLive !== false && s.type === slot.type);
-      if (globalLive.length > 0) {
-        chosen = globalLive[Math.floor(Math.random() * globalLive.length)];
+      // B. 若實時連線該項目缺牌，僅該格獨立降級至「離線備援庫」尋找
+      let backupCandidates = backupEnriched.filter(s => {
+        if (usedNames.has(s.name)) return false;
+        if (s.type !== slot.type) return false;
+        if (slot.type === "景點" && s.isBlacklistedAttraction) return false;
+        if (slot.isMeal && s.isDrinkOrDessert) return false;
+        return true;
+      });
+
+      if (backupCandidates.length > 0) {
+        chosen = backupCandidates[Math.floor(Math.random() * backupCandidates.length)];
       } else {
-        // 萬一完全沒有實時點位，降級取備援
-        chosen = baseCandidates[Math.floor(Math.random() * baseCandidates.length)];
+        // C. 雙庫極限重複抽牌保護
+        let emergencyPool = liveEnriched.length > 0 ? liveEnriched : backupEnriched;
+        let validEmergency = emergencyPool.filter(s => s.type === slot.type);
+        chosen = validEmergency.length > 0 
+          ? validEmergency[Math.floor(Math.random() * validEmergency.length)]
+          : (emergencyPool[0] || { name: `${city}${district}經典地點`, type: slot.type, isLive: false });
       }
     }
 
@@ -302,6 +308,7 @@ function renderTimeline() {
     const queryTerm = `${item.city} ${displayDistrict} ${item.name}`;
     const googleMapUrl = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(queryTerm)}`;
 
+    // 精準顯示單格資料來源：綠色 (實時線上發現) vs 灰色 (經典庫存)
     const sourceBadge = item.isLive !== false 
       ? `<span class="text-[10px] bg-emerald-500 text-white px-2 py-0.5 rounded-full font-semibold"><i class="fa-solid fa-wifi"></i> 📡 實時線上發現</span>`
       : `<span class="text-[10px] bg-slate-300 text-slate-700 px-2 py-0.5 rounded-full"><i class="fa-solid fa-database"></i> 💾 經典庫存</span>`;
@@ -322,7 +329,7 @@ function renderTimeline() {
         </div>
 
         <h3 class="font-bold text-slate-900 text-base mb-1">${item.name}</h3>
-        <p class="text-xs text-slate-600 mb-3">${item.desc || '實時連線挖掘之熱門地點。'}</p>
+        <p class="text-xs text-slate-600 mb-3">${item.desc || '在地真實地點。'}</p>
 
         <div class="flex flex-wrap items-center justify-between gap-2 border-t border-slate-200 pt-3 text-xs">
           <span class="font-medium text-slate-700">預估費用: <strong class="text-emerald-600">約 NT$ ${item.avgCost || 150}</strong></span>
