@@ -1,10 +1,18 @@
 /**
  * 主應用程式邏輯 (App Controller & Map Manager)
+ * 已加入：鄉鎮中心距離半徑過濾 + 正餐手搖飲黑名單過濾
  */
 let selectedTags = new Set();
 let currentItinerary = [];
 let map = null;
 let mapMarkers = [];
+
+// 正餐黑名單 (飲料、甜點、冰品不能當正餐)
+const DRINK_DESSERT_KEYWORDS = [
+  "迷客夏", "可不可", "50嵐", "麻古", "清心", "茶湯會", "大苑子", "珍煮丹", 
+  "龜記", "鮮茶道", "COMEBUY", "五桐號", "再睡5分鐘", "奶茶", "茶飲", "飲料", 
+  "冰品", "冰淇淋", "刨冰", "豆花", "甜點", "咖啡", "CAFE", "COFFEE", "TEA", "黑糖"
+];
 
 let citySelect, districtSelect, budgetSlider, budgetValue, generateBtn, timelineContainer, itineraryStatus, preloadStatusDot, preloadStatusText;
 
@@ -25,7 +33,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   if (citySelect && citySelect.value) {
     fetchOSMData(citySelect.value, districtSelect.value, updatePreloadUI);
-    loadCityJsonFallback(citySelect.value); // 預載該縣市 JSON
+    loadCityJsonFallback(citySelect.value);
   }
 });
 
@@ -105,6 +113,17 @@ function updatePreloadUI(isReady, text) {
   }
 }
 
+function calculateDistance(lat1, lon1, lat2, lon2) {
+  if (!lat1 || !lon1 || !lat2 || !lon2) return 999;
+  const R = 6371;
+  const dLat = (lat2 - lat1) * Math.PI / 180;
+  const dLon = (lon2 - lon1) * Math.PI / 180;
+  const a = Math.sin(dLat/2) * Math.sin(dLat/2) +
+            Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+            Math.sin(dLon/2) * Math.sin(dLon/2);
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+}
+
 function sortItineraryByDistance(items) {
   if (items.length <= 1) return items;
 
@@ -136,16 +155,6 @@ function sortItineraryByDistance(items) {
   }));
 }
 
-function calculateDistance(lat1, lon1, lat2, lon2) {
-  const R = 6371;
-  const dLat = (lat2 - lat1) * Math.PI / 180;
-  const dLon = (lon2 - lon1) * Math.PI / 180;
-  const a = Math.sin(dLat/2) * Math.sin(dLat/2) +
-            Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
-            Math.sin(dLon/2) * Math.sin(dLon/2);
-  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
-}
-
 async function handleGenerate() {
   const city = citySelect.value;
   const district = districtSelect.value;
@@ -158,23 +167,38 @@ async function handleGenerate() {
   document.getElementById('btnText').textContent = "檢索中...";
   generateBtn.disabled = true;
 
-  let spots = await fetchOSMData(city, district, updatePreloadUI);
-  if (!spots || spots.length === 0) {
-    spots = await loadCityJsonFallback(city);
+  let rawSpots = await fetchOSMData(city, district, updatePreloadUI);
+  if (!rawSpots || rawSpots.length === 0) {
+    rawSpots = await loadCityJsonFallback(city);
+  }
+
+  // 1. 強制按「鄉鎮中心經緯度」進行半徑過濾
+  const center = getQueryCenter(city, district);
+  let spots = rawSpots;
+
+  if (district !== "全區") {
+    // 優先限制在鄉鎮中心 7 公里以內
+    let nearby = rawSpots.filter(s => calculateDistance(center[0], center[1], s.lat, s.lng) <= 7.0);
+    if (nearby.length >= 5) {
+      spots = nearby;
+    } else {
+      // 若資料不足，放寬至 12 公里
+      spots = rawSpots.filter(s => calculateDistance(center[0], center[1], s.lat, s.lng) <= 12.0);
+    }
   }
 
   const timeSlots5 = [
-    { time: "09:00 - 10:30", label: "早晨探索", type: "景點", isNightSlot: false },
-    { time: "11:30 - 13:00", label: "午餐時間", type: "美食", isNightSlot: false },
-    { time: "14:00 - 16:30", label: "下午體驗", type: "景點", isNightSlot: false },
-    { time: "18:00 - 19:30", label: "晚餐時間", type: "美食", isNightSlot: true },
-    { time: "20:00 - 21:30", label: "夜間體驗", type: "景點", isNightSlot: true }
+    { time: "09:00 - 10:30", label: "早晨探索", type: "景點", isNightSlot: false, isMeal: false },
+    { time: "11:30 - 13:00", label: "午餐時間", type: "美食", isNightSlot: false, isMeal: true },
+    { time: "14:00 - 16:30", label: "下午體驗", type: "景點", isNightSlot: false, isMeal: false },
+    { time: "18:00 - 19:30", label: "晚餐時間", type: "美食", isNightSlot: true, isMeal: true },
+    { time: "20:00 - 21:30", label: "夜間體驗", type: "景點", isNightSlot: true, isMeal: false }
   ];
 
   const timeSlots3 = [
-    { time: "11:30 - 13:00", label: "午餐時間", type: "美食", isNightSlot: false },
-    { time: "14:00 - 17:00", label: "下午精彩體驗", type: "景點", isNightSlot: false },
-    { time: "18:30 - 20:30", label: "晚餐時間", type: "美食", isNightSlot: true }
+    { time: "11:30 - 13:00", label: "午餐時間", type: "美食", isNightSlot: false, isMeal: true },
+    { time: "14:00 - 17:00", label: "下午精彩體驗", type: "景點", isNightSlot: false, isMeal: false },
+    { time: "18:30 - 20:30", label: "晚餐時間", type: "美食", isNightSlot: true, isMeal: true }
   ];
 
   const slots = pace === 5 ? timeSlots5 : timeSlots3;
@@ -200,6 +224,14 @@ async function handleGenerate() {
       if (isGym && slot.type === "景點" && !s.isGymFriendly) return false;
       if (isMonday && s.mondayOff) return false;
       if (!slot.isNightSlot && s.nightOnly) return false;
+
+      // 2. 正餐時間 (午餐/晚餐) 強制過濾手搖飲與甜點黑名單
+      if (slot.isMeal) {
+        const nameUpper = s.name.toUpperCase();
+        const isDrinkOrDessert = DRINK_DESSERT_KEYWORDS.some(kw => nameUpper.includes(kw));
+        if (isDrinkOrDessert) return false;
+      }
+
       return true;
     });
 
@@ -207,7 +239,6 @@ async function handleGenerate() {
     if (candidates.length > 0) {
       chosen = candidates[Math.floor(Math.random() * candidates.length)];
     } else {
-      const center = getQueryCenter(city, district);
       chosen = {
         name: `${city}${district === "全區" ? "在地" : district}特色${slot.type}`,
         city: city,
@@ -254,7 +285,7 @@ function renderTimeline() {
             </span>
             <span class="text-[10px] bg-slate-200 text-slate-700 px-1.5 py-0.5 rounded-full">${item.category || '精選'}</span>
           </div>
-          <span class="text-xs text-slate-400"><i class="fa-solid fa-location-dot"></i> ${item.city} ${item.district}</span>
+          <span class="text-xs text-slate-400"><i class="fa-solid fa-location-dot"></i> ${item.city} ${item.district || ''}</span>
         </div>
 
         <h3 class="font-bold text-slate-900 text-base mb-1">${item.name}</h3>
@@ -293,22 +324,43 @@ window.rerollSingle = async function(index) {
   const city = citySelect.value;
   const district = districtSelect.value;
   const slot = currentItinerary[index].slotInfo;
+  const center = getQueryCenter(city, district);
   
   let usedNames = new Set();
   currentItinerary.forEach((item, i) => {
     if (i !== index && item.name) usedNames.add(item.name);
   });
 
-  let spots = window.overpassCache[`${city}_${district}`] || window.localJsonCache[city] || [];
-  let candidates = spots.filter(s => !usedNames.has(s.name) && s.type === slot.type);
-  let newItem;
+  let rawSpots = window.overpassCache[`${city}_${district}`] || window.localJsonCache[city] || [];
+  let spots = rawSpots;
 
+  if (district !== "全區") {
+    spots = rawSpots.filter(s => calculateDistance(center[0], center[1], s.lat, s.lng) <= 8.0);
+  }
+
+  let candidates = spots.filter(s => {
+    if (usedNames.has(s.name)) return false;
+    if (s.type !== slot.type) return false;
+    if (slot.isMeal) {
+      const nameUpper = s.name.toUpperCase();
+      if (DRINK_DESSERT_KEYWORDS.some(kw => nameUpper.includes(kw))) return false;
+    }
+    return true;
+  });
+
+  let newItem;
   if (candidates.length > 0) {
     newItem = candidates[Math.floor(Math.random() * candidates.length)];
   } else {
-    const center = getQueryCenter(city, district);
     newItem = {
-      name: `${city}在地精選${slot.type}`, city: city, district: district, category: "精選", avgCost: 150, lat: center[0], lng: center[1], desc: "在地點位"
+      name: `${city}${district === "全區" ? "" : district}在地${slot.type}`, 
+      city: city, 
+      district: district, 
+      category: "精選", 
+      avgCost: 150, 
+      lat: center[0], 
+      lng: center[1], 
+      desc: "在地點位"
     };
   }
 
@@ -337,21 +389,4 @@ function updateMapMarkers() {
         iconAnchor: [15, 15]
       });
 
-      const marker = L.marker([spot.lat, spot.lng], { icon: customIcon })
-        .addTo(map)
-        .bindPopup(`<b>${idx + 1}. ${spot.name}</b><br>${spot.city} ${spot.district}`);
-      
-      mapMarkers.push(marker);
-      bounds.push([spot.lat, spot.lng]);
-    }
-  });
-
-  if (bounds.length > 0) {
-    map.flyToBounds(bounds, { padding: [50, 50], maxZoom: 15, duration: 1.2 });
-  } else {
-    const city = citySelect.value;
-    const district = districtSelect.value;
-    const center = getQueryCenter(city, district);
-    map.flyTo(center, 12, { duration: 1.2 });
-  }
-}
+      const marker = L.marker([spot.lat, spot.lng], {
