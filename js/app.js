@@ -1,19 +1,19 @@
 /**
  * 主應用程式邏輯 (App Controller & Map Manager)
- * 具備：逐格獨立 10s 探索渲染 + 連鎖加盟/宮廟/早午餐硬黑名單封殺
+ * 具備：無罐頭副標題 + 學校設施/學食黑名單 + 下午正餐硬封鎖 + UI 狀態燈連動
  */
 let selectedTags = new Set();
 let currentItinerary = [];
 let map = null;
 let mapMarkers = [];
 
-// 1. 宮廟宗教硬黑名單 (100% 封殺)
+// 1. 宮廟宗教硬黑名單
 const RELIGION_TEMPLE_KEYWORDS = [
   "宮", "廟", "堂", "寺", "壇", "教會", "基督", "長老", "清真寺", "聖堂", 
   "觀音", "佛祖", "神君", "保靈宮", "奉天宮", "保安堂", "慈航", "精舍", "庵", "講堂"
 ];
 
-// 2. 連鎖早午餐硬黑名單 (正餐與夜間 100% 封殺)
+// 2. 連鎖早午餐硬黑名單
 const CHAIN_BREAKFAST_KEYWORDS = [
   "麥味登", "美芝城", "弘爺", "拉亞", "晨間廚房", "賈村", "巨林", "呷尚寶", "奇米", "美而美", "早安", "豆漿"
 ];
@@ -25,9 +25,10 @@ const DRINK_DESSERT_KEYWORDS = [
   "冰品", "冰淇淋", "刨冰", "豆花", "甜點", "黑糖", "萬波", "得正", "一芳"
 ];
 
-// 4. 非旅遊設施黑名單
+// 4. 非旅遊設施及學校/學食黑名單
 const EXCLUDE_FACILITY_KEYWORDS = [
-  "診所", "藥局", "辦公", "加油站", "車業", "通訊", "大樓", "社區", "工程", "公司", "幼兒園", "國小", "國中"
+  "診所", "藥局", "辦公", "加油站", "車業", "通訊", "大樓", "社區", "工程", "公司", 
+  "幼兒園", "國小", "國中", "學生餐廳", "學食", "宿舍", "六宿", "活動中心", "福利社", "食堂"
 ];
 
 let citySelect, districtSelect, budgetSlider, budgetValue, generateBtn, timelineContainer, itineraryStatus, preloadStatusDot, preloadStatusText;
@@ -114,6 +115,13 @@ function bindEvents() {
   }
 }
 
+function updatePreloadUI(isReady, text) {
+  if (preloadStatusText && preloadStatusDot) {
+    preloadStatusText.textContent = text;
+    preloadStatusDot.className = isReady ? "w-2 h-2 rounded-full bg-emerald-400" : "w-2 h-2 rounded-full bg-amber-400 animate-pulse";
+  }
+}
+
 function calculateDistance(lat1, lon1, lat2, lon2) {
   if (!lat1 || !lon1 || !lat2 || !lon2) return 999;
   const R = 6371;
@@ -132,7 +140,7 @@ function filterSlotCandidates(spots, slot, selectedDistrict, center, usedNames) 
     const name = s.name || "";
     if (usedNames.has(name)) return false;
 
-    // 1. 100% 封殺宮廟與非旅遊設施
+    // 1. 100% 封殺宮廟與非旅遊設施/學校宿舍餐廳
     if (RELIGION_TEMPLE_KEYWORDS.some(kw => name.includes(kw))) return false;
     if (EXCLUDE_FACILITY_KEYWORDS.some(kw => name.includes(kw))) return false;
 
@@ -151,9 +159,11 @@ function filterSlotCandidates(spots, slot, selectedDistrict, center, usedNames) 
       return true;
     }
 
-    // 4. 下午體驗 (14:00) 嚴格約束 (咖啡館/甜點/文青景點)
+    // 4. 下午體驗 (14:00) 嚴格約束 (拒絕重頓正餐便當，只許咖啡/甜點/景點)
     if (slot.time && slot.time.includes("14:00")) {
       if (CHAIN_BREAKFAST_KEYWORDS.some(kw => name.includes(kw))) return false;
+      // 強制拒絕正餐大餐/便當小吃 (如妙廚老爹)
+      if (s.type === "美食" && s.amenity !== "cafe") return false;
       return true;
     }
 
@@ -191,7 +201,6 @@ async function handleGenerate() {
 
   const slots = pace === 5 ? timeSlots5 : timeSlots3;
 
-  // 初始化行程陣列 (保留已鎖定者)
   currentItinerary = slots.map((slot, i) => (currentItinerary[i] && currentItinerary[i].isLocked) ? currentItinerary[i] : null);
   
   let usedNames = new Set();
@@ -199,7 +208,6 @@ async function handleGenerate() {
 
   const backupSpots = await loadCityJsonFallback(city);
 
-  // 🚀 核心重構：逐格獨立 (Sequential Slot-by-Slot) 進行 10 秒實時搜尋與即時渲染
   for (let i = 0; i < slots.length; i++) {
     const slot = slots[i];
 
@@ -207,31 +215,33 @@ async function handleGenerate() {
       continue;
     }
 
-    // UI 提示正在搜尋的特定格數
+    updatePreloadUI(false, `實時連線檢索：${slot.label} (${i + 1}/${slots.length})...`);
     document.getElementById('btnIcon').className = "fa-solid fa-spinner animate-spin";
-    document.getElementById('btnText').textContent = `搜尋第 (${i + 1}/${slots.length}) 格: ${slot.label}...`;
-    if (itineraryStatus) itineraryStatus.textContent = `實時連線檢索：${slot.label}...`;
+    document.getElementById('btnText').textContent = `搜尋 (${i + 1}/${slots.length}): ${slot.label}...`;
 
-    // 1. 為此特定 Slot 發射專屬 10 秒實時連線
     let liveSpots = await fetchSlotDataLive(city, district, slot, 10000);
     let validLive = filterSlotCandidates(liveSpots, slot, district, center, usedNames);
 
     let chosen = null;
 
     if (validLive.length > 0) {
-      // ✅ 實時線上找到符合黑名單規範的真實地點
       chosen = validLive[Math.floor(Math.random() * validLive.length)];
       chosen.isLive = true;
     } else {
-      // 2. 實時未找到，改以此 Slot 規則從備援 JSON 篩選
       let validBackup = filterSlotCandidates(backupSpots, slot, district, center, usedNames);
       if (validBackup.length > 0) {
         chosen = validBackup[Math.floor(Math.random() * validBackup.length)];
         chosen.isLive = false;
       } else {
-        // 放寬備援
-        let basicBackup = backupSpots.filter(s => !usedNames.has(s.name) && !RELIGION_TEMPLE_KEYWORDS.some(kw => (s.name||"").includes(kw)));
-        chosen = basicBackup.length > 0 ? basicBackup[Math.floor(Math.random() * basicBackup.length)] : backupSpots[0];
+        // 全縣市跨區檢索，確保下午必定能抓到咖啡館/景點，絕不抓便當店
+        let cityWideBackup = backupSpots.filter(s => {
+          if (usedNames.has(s.name)) return false;
+          if (RELIGION_TEMPLE_KEYWORDS.some(kw => (s.name||"").includes(kw))) return false;
+          if (EXCLUDE_FACILITY_KEYWORDS.some(kw => (s.name||"").includes(kw))) return false;
+          if (slot.time && slot.time.includes("14:00") && s.type === "美食" && s.amenity !== "cafe") return false;
+          return true;
+        });
+        chosen = cityWideBackup.length > 0 ? cityWideBackup[Math.floor(Math.random() * cityWideBackup.length)] : backupSpots[0];
         if (chosen) chosen.isLive = false;
       }
     }
@@ -241,13 +251,15 @@ async function handleGenerate() {
       usedNames.add(chosen.name);
       currentItinerary[i] = { ...chosen, slotInfo: slot, isLocked: false };
 
-      // 💥 即時渲染：每查完一格，立刻把卡片跳出來！
       renderTimeline();
       updateMapMarkers();
     }
   }
 
+  // 🔥 檢索完全結束：更新右上角預載狀態燈為綠色「✅ 探索完成」
+  updatePreloadUI(true, `✅ 探索完成 (${city} ${district})`);
   if (itineraryStatus) itineraryStatus.textContent = `探索完成 (${city} ${district})`;
+  
   document.getElementById('btnIcon').className = "fa-solid fa-compass";
   document.getElementById('btnText').textContent = "🎲 實時探索新行程";
   generateBtn.disabled = false;
@@ -256,7 +268,6 @@ async function handleGenerate() {
 function renderTimeline() {
   timelineContainer.innerHTML = currentItinerary.map((item, index) => {
     if (!item) {
-      // 正在檢索中的骨架卡片
       return `
         <div class="border border-slate-200 rounded-lg p-4 bg-slate-100/50 animate-pulse flex items-center justify-between">
           <span class="text-xs text-slate-400"><i class="fa-solid fa-spinner animate-spin"></i> 實時探索中...</span>
@@ -272,8 +283,16 @@ function renderTimeline() {
       ? `<span class="text-[10px] bg-emerald-500 text-white px-2 py-0.5 rounded-full font-semibold"><i class="fa-solid fa-wifi"></i> 📡 實時線上發現</span>`
       : `<span class="text-[10px] bg-slate-300 text-slate-700 px-2 py-0.5 rounded-full"><i class="fa-solid fa-database"></i> 💾 經典庫存</span>`;
 
+    // 只有當 desc 存在且非罐頭填空句時，才渲染副標題 <p> 標籤
+    const hasValidDesc = item.desc && item.desc.trim().length > 0 && 
+      !item.desc.includes("實時線上發現") && 
+      !item.desc.includes("在地精選") && 
+      !item.desc.includes("在地真實地點");
+
+    const descHtml = hasValidDesc ? `<p class="text-xs text-slate-600 mb-3">${item.desc}</p>` : '';
+
     return `
-      <div class="border border-slate-200 rounded-lg p-4 bg-slate-50/50 hover:bg-white hover:shadow-md transition relative">
+      <div class="border border-slate-200 rounded-lg p-4 bg-slate-50/50 hover:bg-white hover:shadow-md transition relative mb-3">
         <div class="flex items-center justify-between mb-2">
           <div class="flex items-center gap-2">
             <span class="w-6 h-6 rounded-full bg-emerald-600 text-white font-bold text-xs flex items-center justify-center">
@@ -288,7 +307,7 @@ function renderTimeline() {
         </div>
 
         <h3 class="font-bold text-slate-900 text-base mb-1">${item.name}</h3>
-        <p class="text-xs text-slate-600 mb-3">${item.desc || '在地真實地點。'}</p>
+        ${descHtml}
 
         <div class="flex flex-wrap items-center justify-between gap-2 border-t border-slate-200 pt-3 text-xs">
           <span class="font-medium text-slate-700">預估費用: <strong class="text-emerald-600">約 NT$ ${item.avgCost || 150}</strong></span>
