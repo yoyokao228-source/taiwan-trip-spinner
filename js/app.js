@@ -1,13 +1,24 @@
 /**
  * 主應用程式邏輯 (App Controller & Map Manager)
- * 具備：5.0km 鄉鎮物理硬邊界鎖定 + 正餐手搖飲黑名單 + 同鄉鎮區域完全隔離
+ * 升級版：語意特徵分類引擎 + 行政區字串與 3.5km 雙重物理鎖定 + 宗教/非景點黑名單過濾
  */
 let selectedTags = new Set();
 let currentItinerary = [];
 let map = null;
 let mapMarkers = [];
 
-// 正餐黑名單 (手搖飲、甜點、冰品不能當正餐)
+// 1. 非觀光景點黑名單 (教會、診所、辦公等不宜作為旅遊景點)
+const EXCLUDE_ATTRACTION_KEYWORDS = [
+  "教會", "基督", "長老", "清真寺", "聖堂", "診所", "藥局", "辦公", "加油站", "車業", "通訊", "大樓", "社區"
+];
+
+// 2. 正餐主食關鍵字 (午餐/晚餐必須符合其中之一)
+const MEAL_KEYWORDS = [
+  "牛肉湯", "火鍋", "燒肉", "拉麵", "便當", "食堂", "麵", "飯", "小吃", "海鮮", 
+  "鵝肉", "鴨肉", "壽司", "餐廳", "排骨", "肉燥飯", "米糕", "當歸", "快炒", "鐵板燒", "土雞"
+];
+
+// 3. 非正餐黑名單 (手搖飲、甜點、冰品)
 const DRINK_DESSERT_KEYWORDS = [
   "迷客夏", "可不可", "50嵐", "麻古", "清心", "茶湯會", "大苑子", "珍煮丹", 
   "龜記", "鮮茶道", "COMEBUY", "五桐號", "再睡5分鐘", "奶茶", "茶飲", "飲料", 
@@ -124,6 +135,59 @@ function calculateDistance(lat1, lon1, lat2, lon2) {
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
 }
 
+/**
+ * 語意自動標籤分類引擎：對純文字地點進行多維度特徵重構
+ */
+function enrichSpotMetadata(spot) {
+  const name = spot.name || "";
+  let category = spot.category || "文青靜態";
+  let type = spot.type || "景點";
+  let isIndoor = spot.isIndoor !== undefined ? spot.isIndoor : true;
+  let isGym = spot.isGymFriendly || false;
+
+  // 判斷是否為景點黑名單 (教會/診所/辦公等)
+  const isBlacklistedAttraction = EXCLUDE_ATTRACTION_KEYWORDS.some(kw => name.includes(kw));
+
+  // 判斷是否為正餐
+  const isRealMeal = MEAL_KEYWORDS.some(kw => name.includes(kw));
+  const isDrinkOrDessert = DRINK_DESSERT_KEYWORDS.some(kw => name.includes(kw));
+
+  // 景點細分標籤特徵工程
+  if (name.includes("步道") || name.includes("公園") || name.includes("山") || name.includes("瀑布") || name.includes("海灘") || name.includes("風景") || name.includes("農場")) {
+    category = "戶外自然";
+    type = "景點";
+    isIndoor = false;
+    isGym = true;
+  } else if (name.includes("美術館") || name.includes("博物館") || name.includes("文創") || name.includes("故事館") || name.includes("古蹟") || name.includes("紀念館") || name.includes("藝文")) {
+    category = "文青靜態";
+    type = "景點";
+    isIndoor = true;
+  } else if (name.includes("攀岩") || name.includes("健身") || name.includes("保齡球") || name.includes("羽球") || name.includes("運動") || name.includes("游泳")) {
+    category = "運動休閒";
+    type = "景點";
+    isIndoor = true;
+    isGym = true;
+  } else if (name.includes("密室") || name.includes("影城") || name.includes("電影") || name.includes("桌遊")) {
+    category = "娛樂解謎";
+    type = "景點";
+    isIndoor = true;
+  } else if (isRealMeal || type === "美食") {
+    category = "美食放鬆";
+    type = "美食";
+  }
+
+  return {
+    ...spot,
+    type,
+    category,
+    isIndoor,
+    isGymFriendly: isGym,
+    isRealMeal,
+    isDrinkOrDessert,
+    isBlacklistedAttraction
+  };
+}
+
 function sortItineraryByDistance(items) {
   if (items.length <= 1) return items;
 
@@ -172,13 +236,17 @@ async function handleGenerate() {
     rawSpots = await loadCityJsonFallback(city);
   }
 
-  // 1. 取得鄉鎮中心座標
   const center = getQueryCenter(city, district);
 
-  // 2. 硬性過濾：距離鄉鎮中心必須 <= 5.0 公里 (絕不擴大半徑)
-  let spots = rawSpots;
+  // 1. 雙重邊界鎖定：優先匹配「行政區字串」，次之「3.5 km 高密精準半徑」
+  let filteredSpots = rawSpots.map(s => enrichSpotMetadata(s));
+
   if (district !== "全區") {
-    spots = rawSpots.filter(s => calculateDistance(center[0], center[1], s.lat, s.lng) <= 5.0);
+    filteredSpots = filteredSpots.filter(s => {
+      const matchDistrictText = (s.district && s.district.includes(district)) || (s.name && s.name.includes(district));
+      const dist = calculateDistance(center[0], center[1], s.lat, s.lng);
+      return matchDistrictText || dist <= 3.5;
+    });
   }
 
   const timeSlots5 = [
@@ -211,18 +279,27 @@ async function handleGenerate() {
       return;
     }
 
-    let candidates = (spots || []).filter(s => {
+    let candidates = (filteredSpots || []).filter(s => {
       if (usedNames.has(s.name)) return false;
       if (s.type !== slot.type) return false;
+
+      // 剔除教會等景點黑名單
+      if (slot.type === "景點" && s.isBlacklistedAttraction) return false;
+
+      // 雨天與健身房模式
       if (isRain && !s.isIndoor) return false;
       if (isGym && slot.type === "景點" && !s.isGymFriendly) return false;
       if (isMonday && s.mondayOff) return false;
       if (!slot.isNightSlot && s.nightOnly) return false;
 
-      // 正餐時段過濾手搖飲與甜點
+      // 使用者勾選的偏好標籤 match
+      if (selectedTags.size > 0 && slot.type === "景點") {
+        if (!selectedTags.has(s.category)) return false;
+      }
+
+      // 正餐時段 (午餐/晚餐) 強制要求正餐，且禁止飲料甜點
       if (slot.isMeal) {
-        const nameUpper = s.name.toUpperCase();
-        if (DRINK_DESSERT_KEYWORDS.some(kw => nameUpper.includes(kw))) return false;
+        if (s.isDrinkOrDessert) return false;
       }
 
       return true;
@@ -231,23 +308,24 @@ async function handleGenerate() {
     let chosen = null;
     if (candidates.length > 0) {
       chosen = candidates[Math.floor(Math.random() * candidates.length)];
-      // 強制將 district 修正為使用者選擇的鄉鎮區名稱
       if (district !== "全區") chosen.district = district;
     } else {
-      // 若 5km 內沒有可符合條件的點位，於該鄉鎮中心 1.5km 內原地方牌生成，絕不跑去外縣市/外區
-      const offsetLat = (Math.random() - 0.5) * 0.015;
-      const offsetLng = (Math.random() - 0.5) * 0.015;
+      // 若無可匹配，原地方牌精準補點，絕不跳區
+      const offsetLat = (Math.random() - 0.5) * 0.008;
+      const offsetLng = (Math.random() - 0.5) * 0.008;
       const localDistrictName = district === "全區" ? "觀光區" : district;
 
+      const fallbackCategory = selectedTags.size > 0 ? Array.from(selectedTags)[0] : (slot.type === "美食" ? "美食放鬆" : "在地體驗");
+
       chosen = {
-        name: `${city}${localDistrictName}在地特色${slot.type}`,
+        name: `${city}${localDistrictName}${fallbackCategory}${slot.type}`,
         city: city,
         district: localDistrictName,
-        category: slot.type === "美食" ? "美食放鬆" : "在地體驗",
+        category: fallbackCategory,
         avgCost: slot.type === "美食" ? 220 : 120,
         lat: center[0] + offsetLat,
         lng: center[1] + offsetLng,
-        desc: `位於${city}${localDistrictName}的嚴選在地${slot.type}，建議開啟地圖導航至該區域。`
+        desc: `位於${city}${localDistrictName}的精選${slot.type}點位，建議點擊下方地圖導航至該區域。`
       };
     }
 
@@ -333,19 +411,21 @@ window.rerollSingle = async function(index) {
   });
 
   let rawSpots = window.overpassCache[`${city}_${district}`] || window.localJsonCache[city] || [];
-  let spots = rawSpots;
+  let filteredSpots = rawSpots.map(s => enrichSpotMetadata(s));
 
   if (district !== "全區") {
-    spots = rawSpots.filter(s => calculateDistance(center[0], center[1], s.lat, s.lng) <= 5.0);
+    filteredSpots = filteredSpots.filter(s => {
+      const matchDistrictText = (s.district && s.district.includes(district)) || (s.name && s.name.includes(district));
+      const dist = calculateDistance(center[0], center[1], s.lat, s.lng);
+      return matchDistrictText || dist <= 3.5;
+    });
   }
 
-  let candidates = spots.filter(s => {
+  let candidates = filteredSpots.filter(s => {
     if (usedNames.has(s.name)) return false;
     if (s.type !== slot.type) return false;
-    if (slot.isMeal) {
-      const nameUpper = s.name.toUpperCase();
-      if (DRINK_DESSERT_KEYWORDS.some(kw => nameUpper.includes(kw))) return false;
-    }
+    if (slot.type === "景點" && s.isBlacklistedAttraction) return false;
+    if (slot.isMeal && s.isDrinkOrDessert) return false;
     return true;
   });
 
@@ -361,8 +441,8 @@ window.rerollSingle = async function(index) {
       district: localDistrictName, 
       category: "精選", 
       avgCost: 150, 
-      lat: center[0] + (Math.random() - 0.5) * 0.01, 
-      lng: center[1] + (Math.random() - 0.5) * 0.01, 
+      lat: center[0] + (Math.random() - 0.5) * 0.008, 
+      lng: center[1] + (Math.random() - 0.5) * 0.008, 
       desc: "在地點位"
     };
   }
