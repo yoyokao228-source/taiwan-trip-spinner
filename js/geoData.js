@@ -1,5 +1,6 @@
 /**
  * 台灣完整 22 縣市與熱門鄉鎮區座標資料庫 (District Geocoding DB)
+ * 掛載於 window.districtGeoMap 確保全域跨檔案存取
  */
 window.districtGeoMap = {
   "臺北市": {
