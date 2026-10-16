@@ -1,10 +1,9 @@
 /**
- * 實時探索服務 (動態半徑擴散與廣義質感類別版)
+ * 實時探索服務 (方案 B：極致黑名單 + 質感店家標的連線)
  */
 window.overpassCache = {};
 window.localJsonCache = {};
 
-// 6 大國際獨立 API 節點
 const LIVE_API_ENDPOINTS = [
   'https://overpass-api.de/api/interpreter',
   'https://overpass.kumi.systems/api/interpreter',
@@ -25,32 +24,24 @@ window.getQueryCenter = function(city, district) {
   return cityInfo.center;
 };
 
-/**
- * 根據特定時段需求與搜尋半徑構建 Overpass 查詢語法
- */
 function buildTargetedQuery(slot, searchRadius, lat, lng) {
   if (slot.isMeal) {
-    // 正餐：餐廳、快餐、美食街
     return `(
       node["amenity"~"restaurant|fast_food|food_court"]["name"](around:${searchRadius},${lat},${lng});
     );`;
   } else if (slot.time && slot.time.includes("14:00")) {
-    // 下午體驗：廣義質感類別 (獨立咖啡館、冰品甜點、展覽館、選物書店、公園)
     return `(
-      node["amenity"~"cafe|ice_cream"]["name"](around:${searchRadius},${lat},${lng});
+      node["amenity"="cafe"]["name"](around:${searchRadius},${lat},${lng});
       node["tourism"~"museum|gallery|attraction|arts_centre"]["name"](around:${searchRadius},${lat},${lng});
       node["shop"~"bakery|pastry|bookstore"]["name"](around:${searchRadius},${lat},${lng});
-      node["leisure"~"park|garden"]["name"](around:${searchRadius},${lat},${lng});
     );`;
   } else if (slot.time && slot.time.includes("20:00")) {
-    // 夜間體驗：酒吧、夜景、影城、深夜咖啡、休閒娛樂
     return `(
-      node["amenity"~"pub|bar|cinema|cafe"]["name"](around:${searchRadius},${lat},${lng});
+      node["amenity"~"pub|bar|cinema"]["name"](around:${searchRadius},${lat},${lng});
       node["tourism"~"viewpoint|attraction"]["name"](around:${searchRadius},${lat},${lng});
       node["leisure"~"bowling_alley|sports_centre"]["name"](around:${searchRadius},${lat},${lng});
     );`;
   } else {
-    // 早晨景點
     return `(
       node["tourism"~"attraction|museum|viewpoint"]["name"](around:${searchRadius},${lat},${lng});
       node["leisure"~"park|sports_centre|garden"]["name"](around:${searchRadius},${lat},${lng});
@@ -81,9 +72,9 @@ async function fetchEndpointSlot(endpoint, queryBody, timeoutMs = 8000) {
   }
 }
 
-window.fetchSlotDataLive = async function(city, district, slot, timeoutMs = 8000, radiusOverride = null) {
+window.fetchSlotDataLive = async function(city, district, slot, timeoutMs = 8000) {
   const center = window.getQueryCenter(city, district);
-  const searchRadius = radiusOverride || (district === "全區" ? 5000 : 3500);
+  const searchRadius = district === "全區" ? 5000 : 3500;
   const queryBody = buildTargetedQuery(slot, searchRadius, center[0], center[1]);
 
   const tasks = LIVE_API_ENDPOINTS.map(endpoint => fetchEndpointSlot(endpoint, queryBody, timeoutMs));
@@ -133,21 +124,16 @@ function parseOverpassElements(elements, city, district) {
 
     let category = "文青靜態";
     let type = "景點";
-    let isIndoor = true;
 
     if (tags.amenity === 'restaurant' || tags.amenity === 'fast_food' || tags.amenity === 'food_court') {
       type = "美食";
       category = "美食放鬆";
-    } else if (tags.amenity === 'cafe' || tags.amenity === 'ice_cream') {
+    } else if (tags.amenity === 'cafe') {
       type = "景點";
       category = "文青靜態";
     } else if (tags.leisure === 'park' || tags.tourism === 'viewpoint') {
       type = "景點";
       category = "戶外自然";
-      isIndoor = false;
-    } else if (tags.leisure === 'sports_centre' || tags.leisure === 'bowling_alley') {
-      type = "景點";
-      category = "運動休閒";
     }
 
     results.push({
@@ -158,8 +144,7 @@ function parseOverpassElements(elements, city, district) {
       type: type,
       category: category,
       amenity: tags.amenity,
-      isIndoor: isIndoor,
-      avgCost: type === "美食" ? 220 : 120,
+      avgCost: type === "美食" ? 220 : 150,
       lat: el.lat,
       lng: el.lon,
       isLive: true,
