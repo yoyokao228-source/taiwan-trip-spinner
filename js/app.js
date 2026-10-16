@@ -1,6 +1,6 @@
 /**
  * 主應用程式邏輯 (App Controller & Map Manager)
- * 實時連線探索優先版：呈現 📡 實時線上發現 標記，並支援一鍵導向 Google 實時動態探索
+ * 已寫入：備援資料庫配額限制 (5項限2，3項限1) + 30+ 併發矩陣對接
  */
 let selectedTags = new Set();
 let currentItinerary = [];
@@ -184,15 +184,15 @@ async function handleGenerate() {
   const district = districtSelect.value;
   const pace = Number(document.getElementById('paceSelect').value);
 
-  document.getElementById('btnIcon').className = "fa-solid fa-satellite-dish animate-spin";
-  document.getElementById('btnText').textContent = "實時連線探索中...";
+  document.getElementById('btnIcon').className = "fa-solid fa-bolt animate-spin";
+  document.getElementById('btnText').textContent = "30+管道連線中...";
   generateBtn.disabled = true;
 
   let rawSpots = await fetchOSMData(city, district, updatePreloadUI);
   const center = getQueryCenter(city, district);
   let allEnrichedSpots = rawSpots.map(s => enrichSpotMetadata(s));
 
-  // 距離與分區動態過濾
+  // 距離與分區過濾
   let districtSpots = allEnrichedSpots;
   if (district !== "全區") {
     districtSpots = allEnrichedSpots.filter(s => {
@@ -217,12 +217,16 @@ async function handleGenerate() {
   ];
 
   const slots = pace === 5 ? timeSlots5 : timeSlots3;
+  const maxFallbackAllowed = pace === 5 ? 2 : 1; // 硬性規定備援資料庫配額上限
+  let currentFallbackUsed = 0;
+
   let rawSelectedSpots = [];
   let usedNames = new Set();
 
   slots.forEach((slot, index) => {
     if (currentItinerary[index] && currentItinerary[index].isLocked) {
       usedNames.add(currentItinerary[index].name);
+      if (currentItinerary[index].isLive === false) currentFallbackUsed++;
     }
   });
 
@@ -232,8 +236,8 @@ async function handleGenerate() {
       return;
     }
 
-    // 實時候選點篩選
-    let candidates = districtSpots.filter(s => {
+    // 篩選基礎候選者
+    let baseCandidates = districtSpots.filter(s => {
       if (usedNames.has(s.name)) return false;
       if (s.type !== slot.type) return false;
       if (slot.type === "景點" && s.isBlacklistedAttraction) return false;
@@ -244,15 +248,37 @@ async function handleGenerate() {
       return true;
     });
 
-    if (candidates.length === 0) {
-      candidates = districtSpots.filter(s => s.type === slot.type && (!slot.isMeal || !s.isDrinkOrDessert));
+    if (baseCandidates.length === 0) {
+      baseCandidates = districtSpots.filter(s => s.type === slot.type && (!slot.isMeal || !s.isDrinkOrDessert));
     }
 
-    if (candidates.length === 0) {
-      candidates = allEnrichedSpots.filter(s => s.type === slot.type);
+    if (baseCandidates.length === 0) {
+      baseCandidates = allEnrichedSpots.filter(s => s.type === slot.type);
     }
 
-    let chosen = candidates[Math.floor(Math.random() * candidates.length)];
+    // 🔥 實施備援配額限制 (優先選實時點位；只有配額允許時才允許挑備援)
+    let liveCandidates = baseCandidates.filter(s => s.isLive !== false);
+    let fallbackCandidates = baseCandidates.filter(s => s.isLive === false);
+
+    let chosen = null;
+
+    if (liveCandidates.length > 0) {
+      // 1. 優先挑選實時連線點位
+      chosen = liveCandidates[Math.floor(Math.random() * liveCandidates.length)];
+    } else if (fallbackCandidates.length > 0 && currentFallbackUsed < maxFallbackAllowed) {
+      // 2. 實時點位不夠，且備援使用次數「未達上限」時，才允許使用備援
+      chosen = fallbackCandidates[Math.floor(Math.random() * fallbackCandidates.length)];
+      currentFallbackUsed++;
+    } else {
+      // 3. 備援已達上限，強制從全局「實時點位庫」中重複抽選，確保絕不超過備援配額
+      let globalLive = allEnrichedSpots.filter(s => s.isLive !== false && s.type === slot.type);
+      if (globalLive.length > 0) {
+        chosen = globalLive[Math.floor(Math.random() * globalLive.length)];
+      } else {
+        // 萬一完全沒有實時點位，降級取備援
+        chosen = baseCandidates[Math.floor(Math.random() * baseCandidates.length)];
+      }
+    }
 
     usedNames.add(chosen.name);
     rawSelectedSpots.push({ ...chosen, slotInfo: slot, isLocked: false });
@@ -263,7 +289,7 @@ async function handleGenerate() {
   renderTimeline();
   updateMapMarkers();
 
-  itineraryStatus.textContent = `實時探索成功 (${city} ${district})`;
+  itineraryStatus.textContent = `生成成功 (${city} ${district})`;
 
   document.getElementById('btnIcon').className = "fa-solid fa-compass";
   document.getElementById('btnText').textContent = "🎲 實時探索新行程";
@@ -275,12 +301,10 @@ function renderTimeline() {
     const displayDistrict = item.district || (districtSelect.value === "全區" ? "熱門區域" : districtSelect.value);
     const queryTerm = `${item.city} ${displayDistrict} ${item.name}`;
     const googleMapUrl = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(queryTerm)}`;
-    const searchUrl = `https://www.google.com/search?q=${encodeURIComponent(queryTerm + " 營業時間")}`;
 
-    // 顯示實時連線標籤或資料庫標籤
     const sourceBadge = item.isLive !== false 
-      ? `<span class="text-[10px] bg-emerald-500 text-white px-2 py-0.5 rounded-full font-semibold"><i class="fa-solid fa-wifi"></i> 📡 實時最新發現</span>`
-      : `<span class="text-[10px] bg-slate-200 text-slate-700 px-2 py-0.5 rounded-full"><i class="fa-solid fa-database"></i> 💾 經典庫存</span>`;
+      ? `<span class="text-[10px] bg-emerald-500 text-white px-2 py-0.5 rounded-full font-semibold"><i class="fa-solid fa-wifi"></i> 📡 實時線上發現</span>`
+      : `<span class="text-[10px] bg-slate-300 text-slate-700 px-2 py-0.5 rounded-full"><i class="fa-solid fa-database"></i> 💾 經典庫存</span>`;
 
     return `
       <div class="border border-slate-200 rounded-lg p-4 bg-slate-50/50 hover:bg-white hover:shadow-md transition relative">
@@ -311,7 +335,7 @@ function renderTimeline() {
               <i class="fa-solid fa-rotate"></i> 重抽
             </button>
             <a href="${googleMapUrl}" target="_blank" class="px-2.5 py-1 bg-blue-50 border border-blue-200 text-blue-700 rounded text-xs font-medium hover:bg-blue-100">
-              <i class="fa-solid fa-map-pin"></i> Google 地圖探索
+              <i class="fa-solid fa-map-pin"></i> Google 地圖
             </a>
           </div>
         </div>
