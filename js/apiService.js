@@ -1,10 +1,10 @@
 /**
- * 實時探索服務 (Multi-Endpoint Live Discovery Service)
+ * 實時探索服務 (極速並行競速版 - Promise.any Parallel Discovery)
  */
 window.overpassCache = {};
 window.localJsonCache = {};
 
-// 可用的實時 API 鏡像站點 (自動故障轉移)
+// 3 個完全獨立域名的實時 API 鏡像站
 const LIVE_API_ENDPOINTS = [
   'https://overpass-api.de/api/interpreter',
   'https://overpass.kumi.systems/api/interpreter',
@@ -22,24 +22,42 @@ window.getQueryCenter = function(city, district) {
   return cityInfo.center;
 };
 
+// 單一站點請求 (包含熔斷控制)
+async function fetchSingleEndpoint(url, query, timeoutMs = 4000) {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
+  const res = await fetch(url, {
+    method: 'POST',
+    body: 'data=' + encodeURIComponent(query),
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    signal: controller.signal
+  });
+  clearTimeout(timeoutId);
+
+  if (!res.ok) throw new Error(`HTTP Error ${res.status}`);
+  const data = await res.json();
+  if (!data.elements || data.elements.length === 0) throw new Error("Empty Elements");
+  return data.elements;
+}
+
 /**
- * 實時連線抓取（優先連線各大 API 節點，探索最新店家）
+ * 並行競速發送：同時向 3 個鏡像站發起請求，取最快回傳者
  */
 window.fetchOSMData = async function(city, district, onStatusUpdate) {
   const cacheKey = `${city}_${district}`;
   if (window.overpassCache[cacheKey]) {
-    if (onStatusUpdate) onStatusUpdate(true, `✅ 已自實時快取載入 [${city} ${district}] ${window.overpassCache[cacheKey].length} 筆最新點位`);
+    if (onStatusUpdate) onStatusUpdate(true, `✅ [${city} ${district}] 載入快取 (${window.overpassCache[cacheKey].length} 筆)`);
     return window.overpassCache[cacheKey];
   }
 
   const center = window.getQueryCenter(city, district);
   const searchRadius = district === "全區" ? 6000 : 4000;
 
-  if (onStatusUpdate) onStatusUpdate(false, `📡 正在連線地圖衛星網路，實時搜尋 [${city} ${district}] 最新地點...`);
+  if (onStatusUpdate) onStatusUpdate(false, `📡 多節點並行連線中，實時搜尋 [${city} ${district}] 最新地點...`);
 
-  // 開放式語意查詢：抓取區域內所有具名的美食、景點、休閒與商業節點
   const query = `
-    [out:json][timeout:8];
+    [out:json][timeout:5];
     (
       node["tourism"]["name"](around:${searchRadius},${center[0]},${center[1]});
       node["leisure"]["name"](around:${searchRadius},${center[0]},${center[1]});
@@ -49,40 +67,26 @@ window.fetchOSMData = async function(city, district, onStatusUpdate) {
     out body 80;
   `;
 
-  // 自動輪詢多個鏡像站點
-  for (const endpoint of LIVE_API_ENDPOINTS) {
-    try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 7000);
+  try {
+    // 🔥 Promise.any: 同時發送 3 個請求，只要「最快成功的那一台」回應，立刻 return！
+    const rawElements = await Promise.any(
+      LIVE_API_ENDPOINTS.map(url => fetchSingleEndpoint(url, query, 4000))
+    );
 
-      const res = await fetch(endpoint, {
-        method: 'POST',
-        body: 'data=' + encodeURIComponent(query),
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        signal: controller.signal
-      });
-      clearTimeout(timeoutId);
-
-      if (res.ok) {
-        const data = await res.json();
-        const parsed = parseOverpassElements(data.elements, city, district);
-
-        if (parsed.length > 0) {
-          window.overpassCache[cacheKey] = parsed;
-          if (onStatusUpdate) onStatusUpdate(true, `📡 線上實時探索成功！獲取 [${city} ${district}] ${parsed.length} 筆點位`);
-          return parsed;
-        }
-      }
-    } catch (e) {
-      console.warn(`[API Endpoint Warning] 站點 ${endpoint} 無回應，切換至備用節點...`);
+    const parsed = parseOverpassElements(rawElements, city, district);
+    if (parsed.length > 0) {
+      window.overpassCache[cacheKey] = parsed;
+      if (onStatusUpdate) onStatusUpdate(true, `📡 極速連線成功！獲取 [${city} ${district}] ${parsed.length} 筆最新點位`);
+      return parsed;
     }
+    throw new Error("無有效解析點位");
+  } catch (err) {
+    // 只有當 3 個節點都超時或報錯時，才會進到備援離線 JSON
+    console.warn(`[並行連線失敗/全部超時]，秒切在地備援資料庫...`);
+    const fallbackList = await window.loadCityJsonFallback(city);
+    if (onStatusUpdate) onStatusUpdate(true, `💾 已連接在地備援庫 (${fallbackList.length} 筆)`);
+    return fallbackList;
   }
-
-  // 僅在完全斷網或 API 全部超時，才啟用後備 JSON
-  console.warn(`[Network Notice] 實時連線逾時，切換至在地資料庫備援`);
-  const fallbackList = await window.loadCityJsonFallback(city);
-  if (onStatusUpdate) onStatusUpdate(true, `💾 已連接在地備援庫 (${fallbackList.length} 筆)`);
-  return fallbackList;
 };
 
 window.loadCityJsonFallback = async function(cityName) {
@@ -148,8 +152,8 @@ function parseOverpassElements(elements, city, district) {
       avgCost: type === "美食" ? 220 : 100,
       lat: el.lat,
       lng: el.lon,
-      isLive: true, // 標記為實時線上記錄
-      desc: tags.description || tags.note || `實時連線獲取之在地真實${type}`
+      isLive: true,
+      desc: tags.description || tags.note || `實時線上獲取之在地真實${type}`
     });
   });
 
