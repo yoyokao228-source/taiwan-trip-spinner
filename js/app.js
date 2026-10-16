@@ -1,14 +1,34 @@
 /**
  * 主應用程式邏輯 (App Controller & Map Manager)
- * 具備：切換縣市無限預載 + 生成 10 秒 12 通道發射 + 逐格獨立實時檢索/逐項降級備援
+ * 具備：逐格獨立 10s 探索渲染 + 連鎖加盟/宮廟/早午餐硬黑名單封殺
  */
 let selectedTags = new Set();
 let currentItinerary = [];
 let map = null;
 let mapMarkers = [];
 
-const EXCLUDE_ATTRACTION_KEYWORDS = ["教會", "基督", "長老", "清真寺", "聖堂", "診所", "藥局", "辦公", "加油站", "車業", "通訊", "大樓", "社區"];
-const DRINK_DESSERT_KEYWORDS = ["迷客夏", "可不可", "50嵐", "麻古", "清心", "茶湯會", "大苑子", "珍煮丹", "龜記", "鮮茶道", "COMEBUY", "五桐號", "再睡5分鐘", "奶茶", "茶飲", "飲料", "冰品", "冰淇淋", "刨冰", "豆花", "甜點", "黑糖"];
+// 1. 宮廟宗教硬黑名單 (100% 封殺)
+const RELIGION_TEMPLE_KEYWORDS = [
+  "宮", "廟", "堂", "寺", "壇", "教會", "基督", "長老", "清真寺", "聖堂", 
+  "觀音", "佛祖", "神君", "保靈宮", "奉天宮", "保安堂", "慈航", "精舍", "庵", "講堂"
+];
+
+// 2. 連鎖早午餐硬黑名單 (正餐與夜間 100% 封殺)
+const CHAIN_BREAKFAST_KEYWORDS = [
+  "麥味登", "美芝城", "弘爺", "拉亞", "晨間廚房", "賈村", "巨林", "呷尚寶", "奇米", "美而美", "早安", "豆漿"
+];
+
+// 3. 非正餐手搖飲/甜點黑名單
+const DRINK_DESSERT_KEYWORDS = [
+  "迷客夏", "可不可", "50嵐", "麻古", "清心", "茶湯會", "大苑子", "珍煮丹", 
+  "龜記", "鮮茶道", "COMEBUY", "五桐號", "再睡5分鐘", "奶茶", "茶飲", "飲料", 
+  "冰品", "冰淇淋", "刨冰", "豆花", "甜點", "黑糖", "萬波", "得正", "一芳"
+];
+
+// 4. 非旅遊設施黑名單
+const EXCLUDE_FACILITY_KEYWORDS = [
+  "診所", "藥局", "辦公", "加油站", "車業", "通訊", "大樓", "社區", "工程", "公司", "幼兒園", "國小", "國中"
+];
 
 let citySelect, districtSelect, budgetSlider, budgetValue, generateBtn, timelineContainer, itineraryStatus, preloadStatusDot, preloadStatusText;
 
@@ -28,8 +48,6 @@ document.addEventListener('DOMContentLoaded', () => {
   bindEvents();
 
   if (citySelect && citySelect.value) {
-    // 預載模式 (isPreload = true)，無時間上限慢慢查
-    fetchOSMData(citySelect.value, districtSelect.value, updatePreloadUI, true);
     loadCityJsonFallback(citySelect.value);
   }
 });
@@ -63,15 +81,7 @@ function bindEvents() {
   if (citySelect) {
     citySelect.addEventListener('change', () => {
       updateDistricts();
-      // 預載模式，不限制逾時時間
-      fetchOSMData(citySelect.value, districtSelect.value, updatePreloadUI, true);
       loadCityJsonFallback(citySelect.value);
-    });
-  }
-
-  if (districtSelect) {
-    districtSelect.addEventListener('change', () => {
-      fetchOSMData(citySelect.value, districtSelect.value, updatePreloadUI, true);
     });
   }
 
@@ -104,13 +114,6 @@ function bindEvents() {
   }
 }
 
-function updatePreloadUI(isReady, text) {
-  if (preloadStatusText && preloadStatusDot) {
-    preloadStatusText.textContent = text;
-    preloadStatusDot.className = isReady ? "w-2 h-2 rounded-full bg-emerald-400" : "w-2 h-2 rounded-full bg-amber-400 animate-pulse";
-  }
-}
-
 function calculateDistance(lat1, lon1, lat2, lon2) {
   if (!lat1 || !lon1 || !lat2 || !lon2) return 999;
   const R = 6371;
@@ -122,99 +125,55 @@ function calculateDistance(lat1, lon1, lat2, lon2) {
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
 }
 
-function enrichSpotMetadata(spot) {
-  const name = spot.name || "";
-  let category = spot.category || "文青靜態";
-  let type = spot.type || "景點";
+function filterSlotCandidates(spots, slot, selectedDistrict, center, usedNames) {
+  if (!spots || !Array.isArray(spots)) return [];
 
-  const isBlacklistedAttraction = EXCLUDE_ATTRACTION_KEYWORDS.some(kw => name.includes(kw));
-  const isDrinkOrDessert = DRINK_DESSERT_KEYWORDS.some(kw => name.includes(kw));
+  return spots.filter(s => {
+    const name = s.name || "";
+    if (usedNames.has(name)) return false;
 
-  if (name.includes("步道") || name.includes("公園") || name.includes("山") || name.includes("瀑布") || name.includes("海灘") || name.includes("農場")) {
-    category = "戶外自然";
-    type = "景點";
-  } else if (name.includes("美術館") || name.includes("博物館") || name.includes("文創") || name.includes("古蹟") || name.includes("藝文")) {
-    category = "文青靜態";
-    type = "景點";
-  } else if (name.includes("保齡球") || name.includes("健身") || name.includes("運動") || name.includes("攀岩")) {
-    category = "運動休閒";
-    type = "景點";
-  } else if (name.includes("密室") || name.includes("影城") || name.includes("電影") || name.includes("桌遊")) {
-    category = "娛樂解謎";
-    type = "景點";
-  } else if (spot.type === "美食" || spot.amenity === "restaurant" || spot.amenity === "fast_food") {
-    category = "美食放鬆";
-    type = "美食";
-  }
+    // 1. 100% 封殺宮廟與非旅遊設施
+    if (RELIGION_TEMPLE_KEYWORDS.some(kw => name.includes(kw))) return false;
+    if (EXCLUDE_FACILITY_KEYWORDS.some(kw => name.includes(kw))) return false;
 
-  return {
-    ...spot,
-    type,
-    category,
-    isDrinkOrDessert,
-    isBlacklistedAttraction
-  };
-}
-
-function sortItineraryByDistance(items) {
-  if (items.length <= 1) return items;
-  let result = [];
-  let unvisited = [...items];
-  let current = unvisited.shift();
-  result.push(current);
-
-  while (unvisited.length > 0) {
-    let nearestIndex = 0;
-    let minDist = Infinity;
-    for (let i = 0; i < unvisited.length; i++) {
-      let dist = calculateDistance(current.lat, current.lng, unvisited[i].lat, unvisited[i].lng);
-      if (dist < minDist) {
-        minDist = dist;
-        nearestIndex = i;
-      }
+    // 2. 邊界鎖定 (4.0 公里半徑或行政區字串)
+    if (selectedDistrict !== "全區") {
+      const matchText = (s.district && s.district.includes(selectedDistrict)) || name.includes(selectedDistrict);
+      const dist = calculateDistance(center[0], center[1], s.lat, s.lng);
+      if (!matchText && dist > 4.0) return false;
     }
-    current = unvisited.splice(nearestIndex, 1)[0];
-    result.push(current);
-  }
 
-  return result.map((item, index) => ({
-    ...item,
-    slotInfo: items[index].slotInfo
-  }));
+    // 3. 正餐時段 (午餐 11:30 / 晚餐 18:00) 嚴格約束
+    if (slot.isMeal) {
+      if (s.type !== "美食" && s.amenity !== "restaurant" && s.amenity !== "fast_food") return false;
+      if (DRINK_DESSERT_KEYWORDS.some(kw => name.includes(kw))) return false;
+      if (CHAIN_BREAKFAST_KEYWORDS.some(kw => name.includes(kw))) return false;
+      return true;
+    }
+
+    // 4. 下午體驗 (14:00) 嚴格約束 (咖啡館/甜點/文青景點)
+    if (slot.time && slot.time.includes("14:00")) {
+      if (CHAIN_BREAKFAST_KEYWORDS.some(kw => name.includes(kw))) return false;
+      return true;
+    }
+
+    // 5. 夜間體驗 (20:00) 嚴格約束
+    if (slot.time && slot.time.includes("20:00")) {
+      if (CHAIN_BREAKFAST_KEYWORDS.some(kw => name.includes(kw))) return false;
+      return true;
+    }
+
+    return true;
+  });
 }
 
 async function handleGenerate() {
   const city = citySelect.value;
   const district = districtSelect.value;
   const pace = Number(document.getElementById('paceSelect').value);
-
-  document.getElementById('btnIcon').className = "fa-solid fa-wifi animate-spin";
-  document.getElementById('btnText').textContent = "12通道實時搜尋中...";
-  generateBtn.disabled = true;
-
-  // 1. 搜尋發射：10 秒極限連線，12 通道平行抓取
-  let liveSpots = await fetchOSMData(city, district, updatePreloadUI, false);
-  
-  // 2. 隨時準備該縣市的靜態 JSON 以備單項降級
-  let backupSpots = await loadCityJsonFallback(city);
-
   const center = getQueryCenter(city, district);
 
-  let liveEnriched = (liveSpots || []).map(s => enrichSpotMetadata({ ...s, isLive: true }));
-  let backupEnriched = (backupSpots || []).map(s => enrichSpotMetadata({ ...s, isLive: false }));
-
-  // 分區邊界過濾
-  if (district !== "全區") {
-    liveEnriched = liveEnriched.filter(s => {
-      const matchText = (s.district && s.district.includes(district)) || (s.name && s.name.includes(district));
-      return matchText || calculateDistance(center[0], center[1], s.lat, s.lng) <= 5.0;
-    });
-
-    backupEnriched = backupEnriched.filter(s => {
-      const matchText = (s.district && s.district.includes(district)) || (s.name && s.name.includes(district));
-      return matchText || calculateDistance(center[0], center[1], s.lat, s.lng) <= 5.0;
-    });
-  }
+  generateBtn.disabled = true;
 
   const timeSlots5 = [
     { time: "09:00 - 10:30", label: "早晨探索", type: "景點", isMeal: false },
@@ -231,72 +190,64 @@ async function handleGenerate() {
   ];
 
   const slots = pace === 5 ? timeSlots5 : timeSlots3;
-  let rawSelectedSpots = [];
+
+  // 初始化行程陣列 (保留已鎖定者)
+  currentItinerary = slots.map((slot, i) => (currentItinerary[i] && currentItinerary[i].isLocked) ? currentItinerary[i] : null);
+  
   let usedNames = new Set();
+  currentItinerary.forEach(item => { if (item && item.name) usedNames.add(item.name); });
 
-  slots.forEach((slot, index) => {
-    if (currentItinerary[index] && currentItinerary[index].isLocked) {
-      usedNames.add(currentItinerary[index].name);
-    }
-  });
+  const backupSpots = await loadCityJsonFallback(city);
 
-  // 3. 逐格 (Slot-by-Slot) 獨立核對與補牌
-  slots.forEach((slot, index) => {
-    if (currentItinerary[index] && currentItinerary[index].isLocked) {
-      rawSelectedSpots.push(currentItinerary[index]);
-      return;
+  // 🚀 核心重構：逐格獨立 (Sequential Slot-by-Slot) 進行 10 秒實時搜尋與即時渲染
+  for (let i = 0; i < slots.length; i++) {
+    const slot = slots[i];
+
+    if (currentItinerary[i] && currentItinerary[i].isLocked) {
+      continue;
     }
 
-    // A. 優先嘗試從「實時線上點位」尋找該格符合的項目
-    let liveCandidates = liveEnriched.filter(s => {
-      if (usedNames.has(s.name)) return false;
-      if (s.type !== slot.type) return false;
-      if (slot.type === "景點" && s.isBlacklistedAttraction) return false;
-      if (slot.isMeal && s.isDrinkOrDessert) return false;
-      if (selectedTags.size > 0 && slot.type === "景點") {
-        if (!selectedTags.has(s.category)) return false;
-      }
-      return true;
-    });
+    // UI 提示正在搜尋的特定格數
+    document.getElementById('btnIcon').className = "fa-solid fa-spinner animate-spin";
+    document.getElementById('btnText').textContent = `搜尋第 (${i + 1}/${slots.length}) 格: ${slot.label}...`;
+    if (itineraryStatus) itineraryStatus.textContent = `實時連線檢索：${slot.label}...`;
+
+    // 1. 為此特定 Slot 發射專屬 10 秒實時連線
+    let liveSpots = await fetchSlotDataLive(city, district, slot, 10000);
+    let validLive = filterSlotCandidates(liveSpots, slot, district, center, usedNames);
 
     let chosen = null;
 
-    if (liveCandidates.length > 0) {
-      // ✅ 該格成功獲得「實時線上發現」地點
-      chosen = liveCandidates[Math.floor(Math.random() * liveCandidates.length)];
+    if (validLive.length > 0) {
+      // ✅ 實時線上找到符合黑名單規範的真實地點
+      chosen = validLive[Math.floor(Math.random() * validLive.length)];
+      chosen.isLive = true;
     } else {
-      // B. 若實時連線該項目缺牌，僅該格獨立降級至「離線備援庫」尋找
-      let backupCandidates = backupEnriched.filter(s => {
-        if (usedNames.has(s.name)) return false;
-        if (s.type !== slot.type) return false;
-        if (slot.type === "景點" && s.isBlacklistedAttraction) return false;
-        if (slot.isMeal && s.isDrinkOrDessert) return false;
-        return true;
-      });
-
-      if (backupCandidates.length > 0) {
-        chosen = backupCandidates[Math.floor(Math.random() * backupCandidates.length)];
+      // 2. 實時未找到，改以此 Slot 規則從備援 JSON 篩選
+      let validBackup = filterSlotCandidates(backupSpots, slot, district, center, usedNames);
+      if (validBackup.length > 0) {
+        chosen = validBackup[Math.floor(Math.random() * validBackup.length)];
+        chosen.isLive = false;
       } else {
-        // C. 雙庫極限重複抽牌保護
-        let emergencyPool = liveEnriched.length > 0 ? liveEnriched : backupEnriched;
-        let validEmergency = emergencyPool.filter(s => s.type === slot.type);
-        chosen = validEmergency.length > 0 
-          ? validEmergency[Math.floor(Math.random() * validEmergency.length)]
-          : (emergencyPool[0] || { name: `${city}${district}經典地點`, type: slot.type, isLive: false });
+        // 放寬備援
+        let basicBackup = backupSpots.filter(s => !usedNames.has(s.name) && !RELIGION_TEMPLE_KEYWORDS.some(kw => (s.name||"").includes(kw)));
+        chosen = basicBackup.length > 0 ? basicBackup[Math.floor(Math.random() * basicBackup.length)] : backupSpots[0];
+        if (chosen) chosen.isLive = false;
       }
     }
 
-    usedNames.add(chosen.name);
-    rawSelectedSpots.push({ ...chosen, slotInfo: slot, isLocked: false });
-  });
+    if (chosen) {
+      if (district !== "全區") chosen.district = district;
+      usedNames.add(chosen.name);
+      currentItinerary[i] = { ...chosen, slotInfo: slot, isLocked: false };
 
-  currentItinerary = sortItineraryByDistance(rawSelectedSpots);
-  
-  renderTimeline();
-  updateMapMarkers();
+      // 💥 即時渲染：每查完一格，立刻把卡片跳出來！
+      renderTimeline();
+      updateMapMarkers();
+    }
+  }
 
-  itineraryStatus.textContent = `生成成功 (${city} ${district})`;
-
+  if (itineraryStatus) itineraryStatus.textContent = `探索完成 (${city} ${district})`;
   document.getElementById('btnIcon').className = "fa-solid fa-compass";
   document.getElementById('btnText').textContent = "🎲 實時探索新行程";
   generateBtn.disabled = false;
@@ -304,11 +255,19 @@ async function handleGenerate() {
 
 function renderTimeline() {
   timelineContainer.innerHTML = currentItinerary.map((item, index) => {
+    if (!item) {
+      // 正在檢索中的骨架卡片
+      return `
+        <div class="border border-slate-200 rounded-lg p-4 bg-slate-100/50 animate-pulse flex items-center justify-between">
+          <span class="text-xs text-slate-400"><i class="fa-solid fa-spinner animate-spin"></i> 實時探索中...</span>
+        </div>
+      `;
+    }
+
     const displayDistrict = item.district || (districtSelect.value === "全區" ? "熱門區域" : districtSelect.value);
     const queryTerm = `${item.city} ${displayDistrict} ${item.name}`;
     const googleMapUrl = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(queryTerm)}`;
 
-    // 精準顯示單格資料來源：綠色 (實時線上發現) vs 灰色 (經典庫存)
     const sourceBadge = item.isLive !== false 
       ? `<span class="text-[10px] bg-emerald-500 text-white px-2 py-0.5 rounded-full font-semibold"><i class="fa-solid fa-wifi"></i> 📡 實時線上發現</span>`
       : `<span class="text-[10px] bg-slate-300 text-slate-700 px-2 py-0.5 rounded-full"><i class="fa-solid fa-database"></i> 💾 經典庫存</span>`;
@@ -338,9 +297,6 @@ function renderTimeline() {
             <button onclick="toggleLock(${index})" class="px-2.5 py-1 rounded border text-xs font-medium transition ${item.isLocked ? 'bg-amber-100 border-amber-300 text-amber-800' : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-100'}">
               ${item.isLocked ? '<i class="fa-solid fa-lock"></i> 已鎖定' : '<i class="fa-solid fa-lock-open"></i> 鎖定'}
             </button>
-            <button onclick="rerollSingle(${index})" class="px-2.5 py-1 bg-white border border-slate-200 text-slate-600 rounded text-xs font-medium hover:bg-slate-100">
-              <i class="fa-solid fa-rotate"></i> 重抽
-            </button>
             <a href="${googleMapUrl}" target="_blank" class="px-2.5 py-1 bg-blue-50 border border-blue-200 text-blue-700 rounded text-xs font-medium hover:bg-blue-100">
               <i class="fa-solid fa-map-pin"></i> Google 地圖
             </a>
@@ -352,30 +308,10 @@ function renderTimeline() {
 }
 
 window.toggleLock = function(index) {
-  currentItinerary[index].isLocked = !currentItinerary[index].isLocked;
-  renderTimeline();
-};
-
-window.rerollSingle = async function(index) {
-  if (currentItinerary[index].isLocked) return;
-  const city = citySelect.value;
-  const district = districtSelect.value;
-  const slot = currentItinerary[index].slotInfo;
-
-  let rawSpots = window.overpassCache[`${city}_${district}`] || window.localJsonCache[city] || [];
-  let allEnriched = rawSpots.map(s => enrichSpotMetadata(s));
-
-  let candidates = allEnriched.filter(s => s.type === slot.type && (!slot.isMeal || !s.isDrinkOrDessert));
-  let newItem = candidates[Math.floor(Math.random() * candidates.length)];
-
-  currentItinerary[index] = {
-    ...newItem,
-    slotInfo: slot,
-    isLocked: false
-  };
-
-  renderTimeline();
-  updateMapMarkers();
+  if (currentItinerary[index]) {
+    currentItinerary[index].isLocked = !currentItinerary[index].isLocked;
+    renderTimeline();
+  }
 };
 
 function updateMapMarkers() {
@@ -385,7 +321,7 @@ function updateMapMarkers() {
   let bounds = [];
 
   currentItinerary.forEach((spot, idx) => {
-    if (spot.lat && spot.lng) {
+    if (spot && spot.lat && spot.lng) {
       const customIcon = L.divIcon({
         className: 'custom-div-icon',
         html: `<div class="custom-marker">${idx + 1}</div>`,
