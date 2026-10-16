@@ -1,10 +1,11 @@
 /**
- * Overpass API 實時資料抓取服務 (API Service with Abort Controller & Caching)
+ * 實時 API 與動態 JSON 備援服務 (API & Local JSON Fallback Service)
  */
 window.overpassCache = {};
+window.localJsonCache = {};
 
 /**
- * 取得指定縣市與鄉鎮區之精確中心座標
+ * 取得鄉鎮區經緯度中心
  */
 window.getQueryCenter = function(city, district) {
   const geoMap = window.districtGeoMap;
@@ -18,7 +19,41 @@ window.getQueryCenter = function(city, district) {
 };
 
 /**
- * 發送 Overpass API 查詢實時 OSM 景點與美食
+ * 動態載入該縣市之獨立 JSON 備援資料庫 (自動相容根目錄與 data/ 資料夾)
+ */
+window.loadCityJsonFallback = async function(cityName) {
+  if (window.localJsonCache[cityName]) {
+    return window.localJsonCache[cityName];
+  }
+
+  const encodedCity = encodeURIComponent(cityName);
+  const possiblePaths = [
+    `data/${encodedCity}.json`,
+    `${encodedCity}.json`
+  ];
+
+  for (const path of possiblePaths) {
+    try {
+      const res = await fetch(path);
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data) && data.length > 0) {
+          window.localJsonCache[cityName] = data;
+          console.log(`✅ 成功讀取 [${cityName}] 獨立備援庫，共 ${data.length} 筆資料`);
+          return data;
+        }
+      }
+    } catch (e) {
+      // 嘗試下一個路徑
+    }
+  }
+
+  console.warn(`⚠️ 未能載入 [${cityName}] 之獨立 JSON 檔`);
+  return [];
+};
+
+/**
+ * 獲取地點 (實時 API 優先，逾時/失敗則秒切該縣市獨立 JSON)
  */
 window.fetchOSMData = async function(city, district, onStatusUpdate) {
   const cacheKey = `${city}_${district}`;
@@ -32,7 +67,6 @@ window.fetchOSMData = async function(city, district, onStatusUpdate) {
 
   if (onStatusUpdate) onStatusUpdate(false, `正在讀取 [${city} ${district}] 最新地點...`);
 
-  // 輕量化 QL 語法：僅檢索 Node 節點並限制輸出數量
   const query = `
     [out:json][timeout:6];
     (
@@ -44,7 +78,7 @@ window.fetchOSMData = async function(city, district, onStatusUpdate) {
   `;
 
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 6000); // 6秒超時熔斷
+  const timeoutId = setTimeout(() => controller.abort(), 6000); // 6秒熔斷
 
   try {
     const res = await fetch('https://overpass-api.de/api/interpreter', {
@@ -59,20 +93,22 @@ window.fetchOSMData = async function(city, district, onStatusUpdate) {
     const data = await res.json();
     const parsed = parseOverpassElements(data.elements, city, district);
 
-    window.overpassCache[cacheKey] = parsed;
-    if (onStatusUpdate) onStatusUpdate(true, `✅ [${city} ${district}] 獲取 ${parsed.length} 筆實時地點`);
-    return parsed;
+    if (parsed.length > 0) {
+      window.overpassCache[cacheKey] = parsed;
+      if (onStatusUpdate) onStatusUpdate(true, `✅ [${city} ${district}] 獲取 ${parsed.length} 筆實時地點`);
+      return parsed;
+    } else {
+      throw new Error("API 回傳 0 筆資料");
+    }
   } catch (err) {
     clearTimeout(timeoutId);
-    console.warn(`[${city} ${district}] API 響應逾時或失敗，啟用同縣市備援`);
-    if (onStatusUpdate) onStatusUpdate(true, `✅ [${city} ${district}] API 逾時，已準備備援資料`);
-    return [];
+    console.warn(`[${city} ${district}] API 響應逾時或失敗，動態載入 [${city}] 獨立 JSON 備援`);
+    const fallbackList = await window.loadCityJsonFallback(city);
+    if (onStatusUpdate) onStatusUpdate(true, `✅ [${city}] 已使用在地備援庫 (${fallbackList.length} 筆)`);
+    return fallbackList;
   }
 };
 
-/**
- * 解析並規格化 OSM 回傳節點
- */
 function parseOverpassElements(elements, city, district) {
   if (!elements || !Array.isArray(elements)) return [];
   const results = [];
@@ -125,7 +161,7 @@ function parseOverpassElements(elements, city, district) {
       avgCost: type === "美食" ? 220 : 150,
       lat: el.lat,
       lng: el.lon,
-      desc: `實時動態核實地點 (${category})`
+      desc: `實時核實地點 (${category})`
     });
   });
 
