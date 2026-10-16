@@ -1,5 +1,5 @@
 /**
- * 實時探索服務 (6 節點 x 2 雙請求 = 12 並行極速連線)
+ * 實時探索服務 (逐格時段標的連線服務 - Targeted Slot-by-Slot Discovery)
  */
 window.overpassCache = {};
 window.localJsonCache = {};
@@ -14,20 +14,6 @@ const LIVE_API_ENDPOINTS = [
   'https://overpass.nchc.org.tw/api/interpreter'
 ];
 
-// 每個節點發出 2 個精準專用請求 (避免包山包海導致 504 Timeout)
-const SUB_QUERIES = [
-  // 請求 1：觀光景點、休閒公園、藝文設施
-  (r, lat, lng) => `(
-    node["tourism"~"attraction|museum|viewpoint|gallery"]["name"](around:${r},${lat},${lng});
-    node["leisure"~"park|sports_centre|bowling_alley"]["name"](around:${r},${lat},${lng});
-  );`,
-  // 請求 2：美食餐廳、特色咖啡、地方店家
-  (r, lat, lng) => `(
-    node["amenity"~"restaurant|cafe|fast_food|ice_cream|marketplace|pub|bar"]["name"](around:${r},${lat},${lng});
-    node["shop"~"bakery|pastry|bookstore"]["name"](around:${r},${lat},${lng});
-  );`
-];
-
 window.getQueryCenter = function(city, district) {
   const geoMap = window.districtGeoMap;
   if (!geoMap) return [25.0330, 121.5654];
@@ -39,12 +25,44 @@ window.getQueryCenter = function(city, district) {
   return cityInfo.center;
 };
 
-// 單一專屬請求 (可設定獨立熔斷時間)
-async function fetchSubQuery(endpoint, subQueryBody, timeoutMs) {
+/**
+ * 根據特定時段需求 (Slot) 產出精準的輕量化 Overpass 查詢語法
+ */
+function buildTargetedQuery(slot, searchRadius, lat, lng) {
+  if (slot.isMeal) {
+    // 正餐時段：專精抓取餐廳、快餐、地方美食
+    return `(
+      node["amenity"~"restaurant|fast_food|food_court"]["name"](around:${searchRadius},${lat},${lng});
+    );`;
+  } else if (slot.time && slot.time.includes("14:00")) {
+    // 下午體驗：專精獨立咖啡館、風格甜點、藝文展覽館、自然公園
+    return `(
+      node["amenity"="cafe"]["name"](around:${searchRadius},${lat},${lng});
+      node["tourism"~"museum|gallery|attraction"]["name"](around:${searchRadius},${lat},${lng});
+      node["shop"~"bakery|pastry|bookstore"]["name"](around:${searchRadius},${lat},${lng});
+      node["leisure"="park"]["name"](around:${searchRadius},${lat},${lng});
+    );`;
+  } else if (slot.time && slot.time.includes("20:00")) {
+    // 夜間體驗：酒吧、夜景、影城、密室、深夜咖啡
+    return `(
+      node["amenity"~"pub|bar|cinema|cafe"]["name"](around:${searchRadius},${lat},${lng});
+      node["tourism"="viewpoint"]["name"](around:${searchRadius},${lat},${lng});
+      node["leisure"~"bowling_alley|sports_centre"]["name"](around:${searchRadius},${lat},${lng});
+    );`;
+  } else {
+    // 一般早晨景點
+    return `(
+      node["tourism"~"attraction|museum|viewpoint"]["name"](around:${searchRadius},${lat},${lng});
+      node["leisure"~"park|sports_centre"]["name"](around:${searchRadius},${lat},${lng});
+    );`;
+  }
+}
+
+// 單一輕量請求 (10 秒逾時)
+async function fetchEndpointSlot(endpoint, queryBody, timeoutMs = 10000) {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
-
-  const fullQuery = `[out:json][timeout:8];${subQueryBody}out body 60;`;
+  const fullQuery = `[out:json][timeout:8];${queryBody}out body 50;`;
 
   try {
     const res = await fetch(endpoint, {
@@ -65,55 +83,26 @@ async function fetchSubQuery(endpoint, subQueryBody, timeoutMs) {
 }
 
 /**
- * 實時數據抓取
- * @param {boolean} isPreload 是否為切換縣市預載 (true: 無限制等待; false: 10秒極限熔斷)
+ * 專為特定單一 Slot 發起 12 通道實時探索
  */
-window.fetchOSMData = async function(city, district, onStatusUpdate, isPreload = false) {
-  const cacheKey = `${city}_${district}`;
-  if (window.overpassCache[cacheKey]) {
-    if (onStatusUpdate) onStatusUpdate(true, `✅ [${city} ${district}] 已自快取的 ${window.overpassCache[cacheKey].length} 筆點位加載`);
-    return window.overpassCache[cacheKey];
-  }
-
+window.fetchSlotDataLive = async function(city, district, slot, timeoutMs = 10000) {
   const center = window.getQueryCenter(city, district);
-  const searchRadius = district === "全區" ? 6000 : 4000;
+  const searchRadius = district === "全區" ? 5000 : 3500;
+  const queryBody = buildTargetedQuery(slot, searchRadius, center[0], center[1]);
 
-  // 1. 熔斷時間區分：預載模式放寬至 60 秒；手動生成模式給予 10 秒
-  const timeoutMs = isPreload ? 60000 : 10000;
+  // 6 節點平行對此 Slot 發起請求
+  const tasks = LIVE_API_ENDPOINTS.map(endpoint => fetchEndpointSlot(endpoint, queryBody, timeoutMs));
 
-  if (onStatusUpdate) {
-    const modeText = isPreload ? "深度靜默探測中 (不設限等待)..." : "12連線發射中 (10秒實時衝刺)...";
-    onStatusUpdate(false, `📡 正在對 [${city} ${district}] 發起全網連線，${modeText}`);
-  }
-
-  // 2. 構建 6 節點 x 2 請求 = 12 個並行通道
-  const tasks = [];
-  LIVE_API_ENDPOINTS.forEach(endpoint => {
-    SUB_QUERIES.forEach(tmpl => {
-      tasks.push(fetchSubQuery(endpoint, tmpl(searchRadius, center[0], center[1]), timeoutMs));
-    });
-  });
-
-  // 3. 12 通道發射，收集所有順利返回的實時地點
   const results = await Promise.allSettled(tasks);
-  let liveElements = [];
+  let elements = [];
 
   results.forEach(res => {
     if (res.status === 'fulfilled' && Array.isArray(res.value)) {
-      liveElements.push(...res.value);
+      elements.push(...res.value);
     }
   });
 
-  const parsed = parseOverpassElements(liveElements, city, district);
-
-  if (parsed.length > 0) {
-    window.overpassCache[cacheKey] = parsed;
-    if (onStatusUpdate) onStatusUpdate(true, `📡 線上實時探索成功！獲得 [${city} ${district}] ${parsed.length} 筆最新點位`);
-    return parsed;
-  }
-
-  console.warn(`[實時 12 通道無資料或超時] 切換離線備援庫...`);
-  return [];
+  return parseOverpassElements(elements, city, district);
 };
 
 window.loadCityJsonFallback = async function(cityName) {
@@ -150,21 +139,20 @@ function parseOverpassElements(elements, city, district) {
     let category = "文青靜態";
     let type = "景點";
     let isIndoor = true;
-    let isGym = false;
 
-    if (tags.amenity === 'restaurant' || tags.amenity === 'cafe' || tags.amenity === 'fast_food' || tags.amenity === 'ice_cream') {
+    if (tags.amenity === 'restaurant' || tags.amenity === 'fast_food' || tags.amenity === 'food_court') {
       type = "美食";
       category = "美食放鬆";
-      isGym = true;
+    } else if (tags.amenity === 'cafe') {
+      type = "景點";
+      category = "文青靜態";
     } else if (tags.leisure === 'park' || tags.tourism === 'viewpoint') {
       type = "景點";
       category = "戶外自然";
       isIndoor = false;
-      isGym = true;
     } else if (tags.leisure === 'sports_centre' || tags.leisure === 'bowling_alley') {
       type = "景點";
       category = "運動休閒";
-      isGym = true;
     }
 
     results.push({
@@ -174,13 +162,13 @@ function parseOverpassElements(elements, city, district) {
       district: tags['addr:district'] || (district === "全區" ? "觀光區域" : district),
       type: type,
       category: category,
+      amenity: tags.amenity,
       isIndoor: isIndoor,
-      isGymFriendly: isGym,
-      avgCost: type === "美食" ? 220 : 100,
+      avgCost: type === "美食" ? 220 : 120,
       lat: el.lat,
       lng: el.lon,
       isLive: true,
-      desc: tags.description || tags.note || `實時線上發現之在地真實${type}`
+      desc: tags.description || tags.note || `實時線上發現之在地真實地點`
     });
   });
 
