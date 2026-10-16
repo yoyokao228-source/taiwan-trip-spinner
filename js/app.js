@@ -1,17 +1,43 @@
 /**
- * 主應用程式邏輯 (App Controller & Map Manager)
- * 具備：4 階漸進式動態半徑擴散 + 質感類別解鎖 + Google 地圖動態探索橋樑
+ * 主應用程式邏輯 (方案 B：Google Maps 探索橋樑版)
+ * 特色：全時段連鎖黑名單 + 無效字串封殺 + 缺點位時渲染 Google 地圖自動搜尋橋樑
  */
 let selectedTags = new Set();
 let currentItinerary = [];
 let map = null;
 let mapMarkers = [];
 
-// 硬性黑名單
-const RELIGION_TEMPLE_KEYWORDS = ["宮", "廟", "堂", "寺", "壇", "教會", "基督", "長老", "清真寺", "聖堂", "觀音", "佛祖", "神君", "保靈宮", "奉天宮", "保安堂", "慈航", "精舍", "庵", "講堂"];
-const CHAIN_BREAKFAST_KEYWORDS = ["麥味登", "美芝城", "弘爺", "拉亞", "晨間廚房", "賈村", "巨林", "呷尚寶", "奇米", "美而美", "早安", "豆漿"];
-const DRINK_DESSERT_KEYWORDS = ["迷客夏", "可不可", "50嵐", "麻古", "清心", "茶湯會", "大苑子", "珍煮丹", "龜記", "鮮茶道", "COMEBUY", "五桐號", "再睡5分鐘", "奶茶", "茶飲", "飲料", "冰品", "冰淇淋", "刨冰", "豆花", "甜點", "黑糖", "萬波", "得正", "一芳"];
-const EXCLUDE_FACILITY_KEYWORDS = ["診所", "藥局", "辦公", "加油站", "車業", "通訊", "大樓", "社區", "工程", "公司", "幼兒園", "國小", "國中", "學生餐廳", "學食", "宿舍", "六宿", "活動中心", "福利社", "食堂"];
+// 1. 宮廟宗教硬黑名單
+const RELIGION_TEMPLE_KEYWORDS = [
+  "宮", "廟", "堂", "寺", "壇", "教會", "基督", "長老", "清真寺", "聖堂", 
+  "觀音", "佛祖", "神君", "保靈宮", "奉天宮", "保安堂", "慈航", "精舍", "庵", "講堂"
+];
+
+// 2. 連鎖早午餐硬黑名單
+const CHAIN_BREAKFAST_KEYWORDS = [
+  "麥味登", "美芝城", "弘爺", "拉亞", "晨間廚房", "賈村", "巨林", "呷尚寶", "奇米", "美而美", "早安", "豆漿"
+];
+
+// 3. 連鎖咖啡品牌黑名單 (剔除大型連鎖，保留獨立咖啡館)
+const CHAIN_CAFE_KEYWORDS = [
+  "多那之", "路易莎", "星巴克", "cama", "85度C", "85℃", "彼得好", "金礦", "丹堤", "怡客"
+];
+
+// 4. 手搖飲全時段黑名單 (禁止作為獨立景點/正餐)
+const DRINK_DESSERT_KEYWORDS = [
+  "迷客夏", "可不可", "50嵐", "麻古", "清心", "茶湯會", "大苑子", "珍煮丹", 
+  "龜記", "鮮茶道", "COMEBUY", "五桐號", "再睡5分鐘", "奶茶", "茶飲", "飲料", 
+  "萬波", "得正", "一芳"
+];
+
+// 5. 非旅遊設施、學校食堂與無效泛稱黑名單
+const EXCLUDE_FACILITY_KEYWORDS = [
+  "診所", "藥局", "辦公", "加油站", "車業", "通訊", "大樓", "社區", "工程", "公司", 
+  "幼兒園", "國小", "國中", "學生餐廳", "學食", "宿舍", "六宿", "活動中心", "福利社", "食堂"
+];
+
+// 6. 完全無效的泛用名稱
+const INVALID_EXACT_NAMES = ["公園", "美食", "小吃", "餐廳", "無名", "商圈"];
 
 let citySelect, districtSelect, budgetSlider, budgetValue, generateBtn, timelineContainer, itineraryStatus, preloadStatusDot, preloadStatusText;
 
@@ -115,43 +141,42 @@ function calculateDistance(lat1, lon1, lat2, lon2) {
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
 }
 
-/**
- * 嚴格卡控：依據允許的距離半徑卡控類別
- */
-function filterSlotCandidates(spots, slot, selectedDistrict, center, usedNames, maxRadiusKm = 4.0) {
+function filterSlotCandidatesStrict(spots, slot, selectedDistrict, center, usedNames) {
   if (!spots || !Array.isArray(spots)) return [];
 
   return spots.filter(s => {
-    const name = s.name || "";
+    const name = (s.name || "").trim();
     if (usedNames.has(name)) return false;
 
-    // 1. 宮廟、設施、學校宿舍食堂黑名單
+    // 1. 無效單字與黑名單完全剔除
+    if (INVALID_EXACT_NAMES.includes(name) || name.startsWith("無名")) return false;
     if (RELIGION_TEMPLE_KEYWORDS.some(kw => name.includes(kw))) return false;
     if (EXCLUDE_FACILITY_KEYWORDS.some(kw => name.includes(kw))) return false;
+    if (DRINK_DESSERT_KEYWORDS.some(kw => name.includes(kw))) return false; // 全時段封鎖連鎖手搖飲
 
-    // 2. 距離與邊界鎖定
+    // 2. 距離半徑約束 (4.0 公里)
     if (selectedDistrict !== "全區") {
       const matchText = (s.district && s.district.includes(selectedDistrict)) || name.includes(selectedDistrict);
       const dist = calculateDistance(center[0], center[1], s.lat, s.lng);
-      if (!matchText && dist > maxRadiusKm) return false;
+      if (!matchText && dist > 4.0) return false;
     }
 
-    // 3. 正餐時段 (午餐/晚餐)：必須是正餐餐廳，剔除飲料甜點與早午餐連鎖
+    // 3. 正餐時段 (11:30 / 18:00)：剔除連鎖早餐
     if (slot.isMeal) {
       if (s.type !== "美食" && s.amenity !== "restaurant" && s.amenity !== "fast_food") return false;
-      if (DRINK_DESSERT_KEYWORDS.some(kw => name.includes(kw))) return false;
       if (CHAIN_BREAKFAST_KEYWORDS.some(kw => name.includes(kw))) return false;
       return true;
     }
 
-    // 4. 下午體驗 (14:00)：剔除連鎖早餐與重頓便當正餐，許咖啡館/甜點/景點/選物/公園
+    // 4. 下午體驗 (14:00)：封殺連鎖咖啡與重頓正餐便當，只保留獨立咖啡館/甜點/景點
     if (slot.time && slot.time.includes("14:00")) {
       if (CHAIN_BREAKFAST_KEYWORDS.some(kw => name.includes(kw))) return false;
-      if (s.type === "美食" && s.amenity !== "cafe" && s.amenity !== "ice_cream") return false;
+      if (CHAIN_CAFE_KEYWORDS.some(kw => name.includes(kw))) return false; // 封殺多那之、路易莎、星巴克
+      if (s.type === "美食" && s.amenity !== "cafe") return false;
       return true;
     }
 
-    // 5. 夜間體驗 (20:00)：剔除早餐店與常態便當店
+    // 5. 夜間體驗 (20:00)：封殺早餐店與便當店
     if (slot.time && slot.time.includes("20:00")) {
       if (CHAIN_BREAKFAST_KEYWORDS.some(kw => name.includes(kw))) return false;
       if (s.type === "美食" && s.amenity !== "pub" && s.amenity !== "bar" && s.amenity !== "cafe") return false;
@@ -204,58 +229,30 @@ async function handleGenerate() {
     document.getElementById('btnIcon').className = "fa-solid fa-spinner animate-spin";
     document.getElementById('btnText').textContent = `搜尋中 (${i + 1}/${slots.length})...`;
 
-    let chosen = null;
+    // 1. 實時連線發射
+    let liveSpots = await fetchSlotDataLive(city, district, slot, 8000);
+    let validCandidates = filterSlotCandidatesStrict(liveSpots, slot, district, center, usedNames);
 
-    // 🔥 階層 1：區域內 3.5 公里實時搜尋
-    let liveSpots = await fetchSlotDataLive(city, district, slot, 6000, 3500);
-    let validCandidates = filterSlotCandidates(liveSpots, slot, district, center, usedNames, 4.0);
+    let chosen = null;
 
     if (validCandidates.length > 0) {
       chosen = validCandidates[Math.floor(Math.random() * validCandidates.length)];
       chosen.isLive = true;
-      chosen.isExpanded = false;
-    }
-
-    // 🔥 階層 2：若實時未果，嘗試區域內備援 JSON 比對
-    if (!chosen) {
-      let validBackup = filterSlotCandidates(backupSpots, slot, district, center, usedNames, 4.0);
+    } else {
+      // 2. 備援庫搜尋
+      let validBackup = filterSlotCandidatesStrict(backupSpots, slot, district, center, usedNames);
       if (validBackup.length > 0) {
         chosen = validBackup[Math.floor(Math.random() * validBackup.length)];
         chosen.isLive = false;
-        chosen.isExpanded = false;
+      } else {
+        // 3. 觸發 Google 地圖動態探索橋樑 (不硬塞廢料)
+        chosen = {
+          isEmpty: true,
+          slotInfo: slot,
+          city: city,
+          district: district
+        };
       }
-    }
-
-    // 🔥 階層 3：鄰近擴散模式 (半徑放大至 7.0 公里抓取鄰近區質感店家)
-    if (!chosen) {
-      let liveExpanded = await fetchSlotDataLive(city, district, slot, 6000, 7000);
-      let validExpanded = filterSlotCandidates(liveExpanded, slot, district, center, usedNames, 7.5);
-
-      if (validExpanded.length > 0) {
-        chosen = validExpanded[Math.floor(Math.random() * validExpanded.length)];
-        chosen.isLive = true;
-        chosen.isExpanded = true; // 標記為鄰近擴散獲得
-      }
-    }
-
-    // 🔥 階層 4：全縣市廣域質感備援 JSON 搜尋
-    if (!chosen) {
-      let cityWideBackup = filterSlotCandidates(backupSpots, slot, "全區", center, usedNames, 15.0);
-      if (cityWideBackup.length > 0) {
-        chosen = cityWideBackup[Math.floor(Math.random() * cityWideBackup.length)];
-        chosen.isLive = false;
-        chosen.isExpanded = true;
-      }
-    }
-
-    // 🔥 階層 5：若極端情況下全網皆無點位，渲染為「Google 地圖動態探索卡」
-    if (!chosen) {
-      chosen = {
-        isEmpty: true,
-        slotInfo: slot,
-        city: city,
-        district: district
-      };
     }
 
     if (chosen) {
@@ -285,30 +282,37 @@ function renderTimeline() {
       `;
     }
 
-    // Google 地圖動態探索卡
+    // 🌐 方案 B：Google 地圖動態探索橋樑卡片
     if (item.isEmpty) {
-      const targetQuery = item.slotInfo.time.includes("14:00") 
-        ? `${item.city} ${item.district} 獨立咖啡廳 甜點`
-        : `${item.city} ${item.district} 熱門景點`;
-      const googleSearchUrl = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(targetQuery)}`;
+      let searchKeyword = "隱藏景點 特色體驗";
+      if (item.slotInfo.time.includes("14:00")) {
+        searchKeyword = "獨立咖啡廳 風格甜點";
+      } else if (item.slotInfo.time.includes("20:00")) {
+        searchKeyword = "酒吧 夜景 深夜咖啡館";
+      } else if (item.slotInfo.isMeal) {
+        searchKeyword = "特色餐廳 在地美食";
+      }
+
+      const queryTerm = `${item.city} ${item.district === "全區" ? "" : item.district} ${searchKeyword}`;
+      const googleMapUrl = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(queryTerm)}`;
 
       return `
-        <div class="border border-slate-200 rounded-lg p-4 bg-gradient-to-r from-slate-50 to-blue-50/30 relative mb-3">
+        <div class="border border-slate-200 rounded-lg p-4 bg-gradient-to-r from-blue-50/80 to-indigo-50/50 relative mb-3">
           <div class="flex items-center justify-between mb-2">
             <div class="flex items-center gap-2">
               <span class="w-6 h-6 rounded-full bg-blue-600 text-white font-bold text-xs flex items-center justify-center">${index + 1}</span>
               <span class="text-xs font-semibold text-blue-900 bg-blue-100 px-2 py-0.5 rounded">${item.slotInfo.time} · ${item.slotInfo.label}</span>
-              <span class="text-[10px] bg-blue-500 text-white px-2 py-0.5 rounded-full font-semibold"><i class="fa-solid fa-magnifying-glass"></i> Google 地圖實時直連</span>
+              <span class="text-[10px] bg-blue-600 text-white px-2 py-0.5 rounded-full font-semibold"><i class="fa-solid fa-map-location-dot"></i> Google 地圖動態探索</span>
             </div>
           </div>
-          <h3 class="font-bold text-slate-800 text-sm mb-1">${item.city} ${item.district} 風格店家探索</h3>
-          <p class="text-xs text-slate-600 mb-3">該區本時段已嚴格為你剔除便當店與連鎖店，一鍵直達 Google 地圖探索更多評價 4.0 星以上風格店家。</p>
+          <h3 class="font-bold text-slate-800 text-sm mb-1">${item.city} ${item.district} ${searchKeyword}</h3>
+          <p class="text-xs text-slate-600 mb-3">該區域以嚴格標準為你過濾了連鎖加盟與普通便當店。點擊下方一鍵前往 Google 地圖探索更多真實評分 4.0 以上特色小店。</p>
           <div class="flex items-center gap-2">
-            <a href="${googleSearchUrl}" target="_blank" class="px-3 py-1.5 bg-blue-600 text-white rounded text-xs font-semibold hover:bg-blue-700 transition">
-              <i class="fa-solid fa-map-location-dot"></i> 開啟 Google 地圖搜尋
+            <a href="${googleMapUrl}" target="_blank" class="px-3 py-1.5 bg-blue-600 text-white rounded text-xs font-semibold hover:bg-blue-700 transition">
+              <i class="fa-solid fa-compass"></i> 開啟 Google 地圖直達搜尋
             </a>
             <button onclick="rerollSingle(${index})" class="px-2.5 py-1.5 bg-white border border-slate-300 text-slate-700 rounded text-xs font-medium hover:bg-slate-100">
-              <i class="fa-solid fa-rotate"></i> 重抽此格
+              <i class="fa-solid fa-rotate"></i> 重抽
             </button>
           </div>
         </div>
@@ -319,12 +323,9 @@ function renderTimeline() {
     const queryTerm = `${item.city} ${displayDistrict} ${item.name}`;
     const googleMapUrl = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(queryTerm)}`;
 
-    let sourceBadge = `<span class="text-[10px] bg-emerald-500 text-white px-2 py-0.5 rounded-full font-semibold"><i class="fa-solid fa-wifi"></i> 📡 實時線上發現</span>`;
-    if (item.isExpanded) {
-      sourceBadge = `<span class="text-[10px] bg-teal-600 text-white px-2 py-0.5 rounded-full font-semibold"><i class="fa-solid fa-compass"></i> 📡 鄰近特色推薦</span>`;
-    } else if (item.isLive === false) {
-      sourceBadge = `<span class="text-[10px] bg-slate-300 text-slate-700 px-2 py-0.5 rounded-full"><i class="fa-solid fa-database"></i> 💾 經典庫存</span>`;
-    }
+    const sourceBadge = item.isLive !== false 
+      ? `<span class="text-[10px] bg-emerald-500 text-white px-2 py-0.5 rounded-full font-semibold"><i class="fa-solid fa-wifi"></i> 📡 實時線上發現</span>`
+      : `<span class="text-[10px] bg-slate-300 text-slate-700 px-2 py-0.5 rounded-full"><i class="fa-solid fa-database"></i> 💾 經典庫存</span>`;
 
     const hasValidDesc = item.desc && item.desc.trim().length > 0 && 
       !item.desc.includes("實時線上發現") && 
@@ -384,24 +385,21 @@ window.rerollSingle = async function(index) {
   let usedNames = new Set();
   currentItinerary.forEach((item, i) => { if (i !== index && item && item.name) usedNames.add(item.name); });
 
-  let liveSpots = await fetchSlotDataLive(city, district, slot, 6000, 3500);
-  let validCandidates = filterSlotCandidates(liveSpots, slot, district, center, usedNames, 4.0);
+  let liveSpots = await fetchSlotDataLive(city, district, slot, 8000);
+  let validCandidates = filterSlotCandidatesStrict(liveSpots, slot, district, center, usedNames);
 
   let newItem = null;
   if (validCandidates.length > 0) {
     newItem = validCandidates[Math.floor(Math.random() * validCandidates.length)];
     newItem.isLive = true;
   } else {
-    let liveExpanded = await fetchSlotDataLive(city, district, slot, 6000, 7000);
-    let validExpanded = filterSlotCandidates(liveExpanded, slot, district, center, usedNames, 7.5);
-    if (validExpanded.length > 0) {
-      newItem = validExpanded[Math.floor(Math.random() * validExpanded.length)];
-      newItem.isLive = true;
-      newItem.isExpanded = true;
+    let backupSpots = await loadCityJsonFallback(city);
+    let validBackup = filterSlotCandidatesStrict(backupSpots, slot, district, center, usedNames);
+    if (validBackup.length > 0) {
+      newItem = validBackup[Math.floor(Math.random() * validBackup.length)];
+      newItem.isLive = false;
     } else {
-      let backupSpots = await loadCityJsonFallback(city);
-      let validBackup = filterSlotCandidates(backupSpots, slot, district, center, usedNames, 10.0);
-      newItem = validBackup.length > 0 ? validBackup[Math.floor(Math.random() * validBackup.length)] : { isEmpty: true, slotInfo: slot, city, district };
+      newItem = { isEmpty: true, slotInfo: slot, city, district };
     }
   }
 
