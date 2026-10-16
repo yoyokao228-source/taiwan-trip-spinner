@@ -1,12 +1,11 @@
 /**
- * 主應用程式邏輯 (App Controller, Spatial Sorting & UI Manager)
+ * 主應用程式邏輯 (App Controller & Map Manager)
  */
 let selectedTags = new Set();
 let currentItinerary = [];
 let map = null;
 let mapMarkers = [];
 
-// DOM 元素引用
 let citySelect, districtSelect, budgetSlider, budgetValue, generateBtn, timelineContainer, itineraryStatus, preloadStatusDot, preloadStatusText;
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -24,31 +23,21 @@ document.addEventListener('DOMContentLoaded', () => {
   initMap();
   bindEvents();
 
-  // 初始化預載第一個縣市
   if (citySelect && citySelect.value) {
     fetchOSMData(citySelect.value, districtSelect.value, updatePreloadUI);
+    loadCityJsonFallback(citySelect.value); // 預載該縣市 JSON
   }
 });
 
-/**
- * 初始化縣市選單
- */
 function initCitySelect() {
-  const geoMap = window.districtGeoMap || (typeof districtGeoMap !== 'undefined' ? districtGeoMap : null);
-  if (!geoMap) {
-    console.error("districtGeoMap 資料未載入，請確認 js/geoData.js 是否正確引入！");
-    return;
-  }
-  const cities = Object.keys(geoMap);
-  citySelect.innerHTML = cities.map(city => `<option value="${city}">${city}</option>`).join('');
+  const geoMap = window.districtGeoMap;
+  if (!geoMap) return;
+  citySelect.innerHTML = Object.keys(geoMap).map(city => `<option value="${city}">${city}</option>`).join('');
   updateDistricts();
 }
 
-/**
- * 連動更新鄉鎮選單
- */
 function updateDistricts() {
-  const geoMap = window.districtGeoMap || (typeof districtGeoMap !== 'undefined' ? districtGeoMap : null);
+  const geoMap = window.districtGeoMap;
   if (!geoMap || !citySelect) return;
   const city = citySelect.value;
   const cityData = geoMap[city];
@@ -56,9 +45,6 @@ function updateDistricts() {
   districtSelect.innerHTML = districts.map(d => `<option value="${d}">${d}</option>`).join('');
 }
 
-/**
- * 初始化 Leaflet 地圖
- */
 function initMap() {
   if (typeof L === 'undefined') return;
   map = L.map('map').setView([25.0330, 121.5654], 12);
@@ -68,14 +54,12 @@ function initMap() {
   }).addTo(map);
 }
 
-/**
- * 綁定 UI 操作事件
- */
 function bindEvents() {
   if (citySelect) {
     citySelect.addEventListener('change', () => {
       updateDistricts();
       fetchOSMData(citySelect.value, districtSelect.value, updatePreloadUI);
+      loadCityJsonFallback(citySelect.value);
     });
   }
 
@@ -121,9 +105,6 @@ function updatePreloadUI(isReady, text) {
   }
 }
 
-/**
- * 空間距離順暢排序演算法 (Nearest Neighbor Distance Sorting)
- */
 function sortItineraryByDistance(items) {
   if (items.length <= 1) return items;
 
@@ -165,9 +146,6 @@ function calculateDistance(lat1, lon1, lat2, lon2) {
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
 }
 
-/**
- * 核心行程生成流程
- */
 async function handleGenerate() {
   const city = citySelect.value;
   const district = districtSelect.value;
@@ -180,7 +158,10 @@ async function handleGenerate() {
   document.getElementById('btnText').textContent = "檢索中...";
   generateBtn.disabled = true;
 
-  let apiSpots = await fetchOSMData(city, district, updatePreloadUI);
+  let spots = await fetchOSMData(city, district, updatePreloadUI);
+  if (!spots || spots.length === 0) {
+    spots = await loadCityJsonFallback(city);
+  }
 
   const timeSlots5 = [
     { time: "09:00 - 10:30", label: "早晨探索", type: "景點", isNightSlot: false },
@@ -206,16 +187,13 @@ async function handleGenerate() {
     }
   });
 
-  const fallbackPool = window.REAL_VENUES_DB || (typeof REAL_VENUES_DB !== 'undefined' ? REAL_VENUES_DB : []);
-  const cityStrictFallbackPool = fallbackPool.filter(v => v.city === city);
-
   slots.forEach((slot, index) => {
     if (currentItinerary[index] && currentItinerary[index].isLocked) {
       rawSelectedSpots.push(currentItinerary[index]);
       return;
     }
 
-    let candidates = (apiSpots || []).filter(s => {
+    let candidates = (spots || []).filter(s => {
       if (usedNames.has(s.name)) return false;
       if (s.type !== slot.type) return false;
       if (isRain && !s.isIndoor) return false;
@@ -229,32 +207,17 @@ async function handleGenerate() {
     if (candidates.length > 0) {
       chosen = candidates[Math.floor(Math.random() * candidates.length)];
     } else {
-      const fallbackCandidates = cityStrictFallbackPool.filter(p => {
-        if (usedNames.has(p.name)) return false;
-        if (p.type !== slot.type) return false;
-        if (isRain && !p.isIndoor) return false;
-        if (isMonday && p.mondayOff) return false;
-        if (!slot.isNightSlot && p.nightOnly) return false;
-        return true;
-      });
-
-      if (fallbackCandidates.length > 0) {
-        chosen = fallbackCandidates[Math.floor(Math.random() * fallbackCandidates.length)];
-      } else if (cityStrictFallbackPool.length > 0) {
-        chosen = cityStrictFallbackPool[Math.floor(Math.random() * cityStrictFallbackPool.length)];
-      } else {
-        const center = getQueryCenter(city, district);
-        chosen = {
-          name: `${city}${district === "全區" ? "在地" : district}特色景點`,
-          city: city,
-          district: district === "全區" ? "商圈" : district,
-          category: "在地體驗",
-          avgCost: 150,
-          lat: center[0] + (Math.random() - 0.5) * 0.01,
-          lng: center[1] + (Math.random() - 0.5) * 0.01,
-          desc: "在地嚴選點位，建議點擊地圖與搜尋按鈕獲取詳細營業資訊。"
-        };
-      }
+      const center = getQueryCenter(city, district);
+      chosen = {
+        name: `${city}${district === "全區" ? "在地" : district}特色${slot.type}`,
+        city: city,
+        district: district === "全區" ? "觀光區" : district,
+        category: "在地體驗",
+        avgCost: slot.type === "美食" ? 220 : 150,
+        lat: center[0] + (Math.random() - 0.5) * 0.01,
+        lng: center[1] + (Math.random() - 0.5) * 0.01,
+        desc: "在地嚴選點位，建議點擊地圖與搜尋按鈕獲取詳細營業資訊。"
+      };
     }
 
     usedNames.add(chosen.name);
@@ -273,9 +236,6 @@ async function handleGenerate() {
   generateBtn.disabled = false;
 }
 
-/**
- * 渲染行程時間軸 UI
- */
 function renderTimeline() {
   timelineContainer.innerHTML = currentItinerary.map((item, index) => {
     const queryTerm = `${item.city} ${item.district} ${item.name}`;
@@ -328,7 +288,7 @@ window.toggleLock = function(index) {
   renderTimeline();
 };
 
-window.rerollSingle = function(index) {
+window.rerollSingle = async function(index) {
   if (currentItinerary[index].isLocked) return;
   const city = citySelect.value;
   const district = districtSelect.value;
@@ -339,18 +299,16 @@ window.rerollSingle = function(index) {
     if (i !== index && item.name) usedNames.add(item.name);
   });
 
-  const cacheKey = `${city}_${district}`;
-  const apiSpots = overpassCache[cacheKey] || [];
-  let candidates = apiSpots.filter(s => !usedNames.has(s.name) && s.type === slot.type);
+  let spots = window.overpassCache[`${city}_${district}`] || window.localJsonCache[city] || [];
+  let candidates = spots.filter(s => !usedNames.has(s.name) && s.type === slot.type);
   let newItem;
 
   if (candidates.length > 0) {
     newItem = candidates[Math.floor(Math.random() * candidates.length)];
   } else {
-    const fallbackPool = window.REAL_VENUES_DB || (typeof REAL_VENUES_DB !== 'undefined' ? REAL_VENUES_DB : []);
-    const cityPool = fallbackPool.filter(v => v.city === city && v.type === slot.type && !usedNames.has(v.name));
-    newItem = cityPool.length > 0 ? cityPool[Math.floor(Math.random() * cityPool.length)] : {
-      name: `${city}特色景點`, city: city, district: district, category: "精選", avgCost: 150, lat: 25.033, lng: 121.565, desc: "在地點位"
+    const center = getQueryCenter(city, district);
+    newItem = {
+      name: `${city}在地精選${slot.type}`, city: city, district: district, category: "精選", avgCost: 150, lat: center[0], lng: center[1], desc: "在地點位"
     };
   }
 
@@ -364,9 +322,6 @@ window.rerollSingle = function(index) {
   updateMapMarkers();
 };
 
-/**
- * 更新 Leaflet 地圖標記與視野
- */
 function updateMapMarkers() {
   if (!map) return;
   mapMarkers.forEach(m => map.removeLayer(m));
