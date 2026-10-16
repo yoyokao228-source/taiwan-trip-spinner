@@ -1,14 +1,26 @@
 /**
- * 實時探索服務 (極速並行競速版 - Promise.any Parallel Discovery)
+ * 實時探索服務 (30+ 矩陣競速引擎 - Matrix Parallel Discovery Engine)
  */
 window.overpassCache = {};
 window.localJsonCache = {};
 
-// 3 個完全獨立域名的實時 API 鏡像站
+// 6 大國際獨立連線節點
 const LIVE_API_ENDPOINTS = [
   'https://overpass-api.de/api/interpreter',
   'https://overpass.kumi.systems/api/interpreter',
-  'https://maps.mail.ru/osm/tools/overpass/api/interpreter'
+  'https://maps.mail.ru/osm/tools/overpass/api/interpreter',
+  'https://overpass.openstreetmap.fr/api/interpreter',
+  'https://overpass.eu/api/interpreter',
+  'https://overpass.nchc.org.tw/api/interpreter'
+];
+
+// 5 大輕量語意主題拆分 (提高伺服器算力響應速度)
+const SUB_QUERY_TEMPLATES = [
+  (r, lat, lng) => `node["amenity"~"restaurant|fast_food"]["name"](around:${r},${lat},${lng});`,
+  (r, lat, lng) => `node["amenity"~"cafe|pub|bar|marketplace|ice_cream"]["name"](around:${r},${lat},${lng});`,
+  (r, lat, lng) => `node["tourism"~"attraction|museum|viewpoint|gallery"]["name"](around:${r},${lat},${lng});`,
+  (r, lat, lng) => `node["leisure"~"park|sports_centre|bowling_alley"]["name"](around:${r},${lat},${lng});`,
+  (r, lat, lng) => `node["shop"~"bakery|pastry|bookstore"]["name"](around:${r},${lat},${lng});`
 ];
 
 window.getQueryCenter = function(city, district) {
@@ -22,27 +34,28 @@ window.getQueryCenter = function(city, district) {
   return cityInfo.center;
 };
 
-// 單一站點請求 (包含熔斷控制)
-async function fetchSingleEndpoint(url, query, timeoutMs = 4000) {
+// 單一極輕量請求 (3.5 秒秒殺熔斷)
+async function fetchLightweightQuery(endpoint, subQueryBody) {
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+  const timeoutId = setTimeout(() => controller.abort(), 3500);
 
-  const res = await fetch(url, {
+  const fullQuery = `[out:json][timeout:4];(${subQueryBody});out body 40;`;
+
+  const res = await fetch(endpoint, {
     method: 'POST',
-    body: 'data=' + encodeURIComponent(query),
+    body: 'data=' + encodeURIComponent(fullQuery),
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     signal: controller.signal
   });
   clearTimeout(timeoutId);
 
-  if (!res.ok) throw new Error(`HTTP Error ${res.status}`);
+  if (!res.ok) throw new Error("HTTP Error");
   const data = await res.json();
-  if (!data.elements || data.elements.length === 0) throw new Error("Empty Elements");
-  return data.elements;
+  return data.elements || [];
 }
 
 /**
- * 並行競速發送：同時向 3 個鏡像站發起請求，取最快回傳者
+ * 30+ 矩陣式並行連線抓取
  */
 window.fetchOSMData = async function(city, district, onStatusUpdate) {
   const cacheKey = `${city}_${district}`;
@@ -54,39 +67,39 @@ window.fetchOSMData = async function(city, district, onStatusUpdate) {
   const center = window.getQueryCenter(city, district);
   const searchRadius = district === "全區" ? 6000 : 4000;
 
-  if (onStatusUpdate) onStatusUpdate(false, `📡 多節點並行連線中，實時搜尋 [${city} ${district}] 最新地點...`);
+  if (onStatusUpdate) onStatusUpdate(false, `⚡ 啟動 30+ 多管道極速並行掃瞄 [${city} ${district}]...`);
 
-  const query = `
-    [out:json][timeout:5];
-    (
-      node["tourism"]["name"](around:${searchRadius},${center[0]},${center[1]});
-      node["leisure"]["name"](around:${searchRadius},${center[0]},${center[1]});
-      node["amenity"~"restaurant|cafe|fast_food|cinema|marketplace|pub|bar|ice_cream"]["name"](around:${searchRadius},${center[0]},${center[1]});
-      node["shop"~"bakery|pastry|bookstore"]["name"](around:${searchRadius},${center[0]},${center[1]});
-    );
-    out body 80;
-  `;
+  // 構建 6 節點 x 5 主題 = 30 個並行 Fetch Tasks
+  const parallelTasks = [];
+  LIVE_API_ENDPOINTS.forEach(endpoint => {
+    SUB_QUERY_TEMPLATES.forEach(tmpl => {
+      const subQueryBody = tmpl(searchRadius, center[0], center[1]);
+      parallelTasks.push(fetchLightweightQuery(endpoint, subQueryBody));
+    });
+  });
 
-  try {
-    // 🔥 Promise.any: 同時發送 3 個請求，只要「最快成功的那一台」回應，立刻 return！
-    const rawElements = await Promise.any(
-      LIVE_API_ENDPOINTS.map(url => fetchSingleEndpoint(url, query, 4000))
-    );
+  // 發射 30+ 並行連線，收集所有成功返回的結果
+  const results = await Promise.allSettled(parallelTasks);
+  let liveElements = [];
 
-    const parsed = parseOverpassElements(rawElements, city, district);
-    if (parsed.length > 0) {
-      window.overpassCache[cacheKey] = parsed;
-      if (onStatusUpdate) onStatusUpdate(true, `📡 極速連線成功！獲取 [${city} ${district}] ${parsed.length} 筆最新點位`);
-      return parsed;
+  results.forEach(res => {
+    if (res.status === 'fulfilled' && Array.isArray(res.value)) {
+      liveElements.push(...res.value);
     }
-    throw new Error("無有效解析點位");
-  } catch (err) {
-    // 只有當 3 個節點都超時或報錯時，才會進到備援離線 JSON
-    console.warn(`[並行連線失敗/全部超時]，秒切在地備援資料庫...`);
-    const fallbackList = await window.loadCityJsonFallback(city);
-    if (onStatusUpdate) onStatusUpdate(true, `💾 已連接在地備援庫 (${fallbackList.length} 筆)`);
-    return fallbackList;
+  });
+
+  const parsed = parseOverpassElements(liveElements, city, district);
+
+  if (parsed.length > 0) {
+    window.overpassCache[cacheKey] = parsed;
+    if (onStatusUpdate) onStatusUpdate(true, `📡 矩陣連線成功！獲得 [${city} ${district}] ${parsed.length} 筆實時點位`);
+    return parsed;
   }
+
+  console.warn(`[30+ 管道併發失敗] 切換至在地備援資料庫...`);
+  const fallbackList = await window.loadCityJsonFallback(city);
+  if (onStatusUpdate) onStatusUpdate(true, `💾 已連接在地備援庫 (${fallbackList.length} 筆)`);
+  return fallbackList;
 };
 
 window.loadCityJsonFallback = async function(cityName) {
