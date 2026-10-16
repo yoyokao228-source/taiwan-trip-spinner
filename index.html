@@ -119,7 +119,7 @@
         </div>
       </div>
 
-      <!-- 6. Switch Toggles -->
+      <!-- 6. 功能切換選單 -->
       <div class="border-t pt-4 space-y-3">
         <label class="flex justify-between items-center text-xs text-slate-700 cursor-pointer">
           <span>☔ 雨天備案（僅限純室內）</span>
@@ -147,7 +147,7 @@
         </div>
       </div>
 
-      <!-- Action Button -->
+      <!-- 行程生成按鈕 -->
       <button id="generateBtn" class="w-full py-3 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl shadow-md transition transform active:scale-95 flex justify-center items-center gap-2">
         <i class="fa-solid fa-dice" id="btnIcon"></i> <span id="btnText">🎲 生成專屬行程</span>
       </button>
@@ -180,5 +180,10 @@
     </section>
   </main>
 
-  <!-- 引入獨立模組檔案 -->
+  <!-- 依序引入 4 個獨立功能模組 -->
   <script src="js/geoData.js"></script>
+  <script src="js/fallbackDb.js"></script>
+  <script src="js/apiService.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>
