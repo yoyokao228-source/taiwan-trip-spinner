@@ -1,10 +1,10 @@
 /**
- * 實時探索服務 (30+ 矩陣競速引擎 - Matrix Parallel Discovery Engine)
+ * 實時探索服務 (6 節點 x 2 雙請求 = 12 並行極速連線)
  */
 window.overpassCache = {};
 window.localJsonCache = {};
 
-// 6 大國際獨立連線節點
+// 6 大國際獨立 API 節點
 const LIVE_API_ENDPOINTS = [
   'https://overpass-api.de/api/interpreter',
   'https://overpass.kumi.systems/api/interpreter',
@@ -14,13 +14,18 @@ const LIVE_API_ENDPOINTS = [
   'https://overpass.nchc.org.tw/api/interpreter'
 ];
 
-// 5 大輕量語意主題拆分 (提高伺服器算力響應速度)
-const SUB_QUERY_TEMPLATES = [
-  (r, lat, lng) => `node["amenity"~"restaurant|fast_food"]["name"](around:${r},${lat},${lng});`,
-  (r, lat, lng) => `node["amenity"~"cafe|pub|bar|marketplace|ice_cream"]["name"](around:${r},${lat},${lng});`,
-  (r, lat, lng) => `node["tourism"~"attraction|museum|viewpoint|gallery"]["name"](around:${r},${lat},${lng});`,
-  (r, lat, lng) => `node["leisure"~"park|sports_centre|bowling_alley"]["name"](around:${r},${lat},${lng});`,
-  (r, lat, lng) => `node["shop"~"bakery|pastry|bookstore"]["name"](around:${r},${lat},${lng});`
+// 每個節點發出 2 個精準專用請求 (避免包山包海導致 504 Timeout)
+const SUB_QUERIES = [
+  // 請求 1：觀光景點、休閒公園、藝文設施
+  (r, lat, lng) => `(
+    node["tourism"~"attraction|museum|viewpoint|gallery"]["name"](around:${r},${lat},${lng});
+    node["leisure"~"park|sports_centre|bowling_alley"]["name"](around:${r},${lat},${lng});
+  );`,
+  // 請求 2：美食餐廳、特色咖啡、地方店家
+  (r, lat, lng) => `(
+    node["amenity"~"restaurant|cafe|fast_food|ice_cream|marketplace|pub|bar"]["name"](around:${r},${lat},${lng});
+    node["shop"~"bakery|pastry|bookstore"]["name"](around:${r},${lat},${lng});
+  );`
 ];
 
 window.getQueryCenter = function(city, district) {
@@ -34,52 +39,63 @@ window.getQueryCenter = function(city, district) {
   return cityInfo.center;
 };
 
-// 單一極輕量請求 (3.5 秒秒殺熔斷)
-async function fetchLightweightQuery(endpoint, subQueryBody) {
+// 單一專屬請求 (可設定獨立熔斷時間)
+async function fetchSubQuery(endpoint, subQueryBody, timeoutMs) {
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 3500);
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
-  const fullQuery = `[out:json][timeout:4];(${subQueryBody});out body 40;`;
+  const fullQuery = `[out:json][timeout:8];${subQueryBody}out body 60;`;
 
-  const res = await fetch(endpoint, {
-    method: 'POST',
-    body: 'data=' + encodeURIComponent(fullQuery),
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    signal: controller.signal
-  });
-  clearTimeout(timeoutId);
+  try {
+    const res = await fetch(endpoint, {
+      method: 'POST',
+      body: 'data=' + encodeURIComponent(fullQuery),
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      signal: controller.signal
+    });
+    clearTimeout(timeoutId);
 
-  if (!res.ok) throw new Error("HTTP Error");
-  const data = await res.json();
-  return data.elements || [];
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    return data.elements || [];
+  } catch (err) {
+    clearTimeout(timeoutId);
+    return [];
+  }
 }
 
 /**
- * 30+ 矩陣式並行連線抓取
+ * 實時數據抓取
+ * @param {boolean} isPreload 是否為切換縣市預載 (true: 無限制等待; false: 10秒極限熔斷)
  */
-window.fetchOSMData = async function(city, district, onStatusUpdate) {
+window.fetchOSMData = async function(city, district, onStatusUpdate, isPreload = false) {
   const cacheKey = `${city}_${district}`;
   if (window.overpassCache[cacheKey]) {
-    if (onStatusUpdate) onStatusUpdate(true, `✅ [${city} ${district}] 載入快取 (${window.overpassCache[cacheKey].length} 筆)`);
+    if (onStatusUpdate) onStatusUpdate(true, `✅ [${city} ${district}] 已自快取的 ${window.overpassCache[cacheKey].length} 筆點位加載`);
     return window.overpassCache[cacheKey];
   }
 
   const center = window.getQueryCenter(city, district);
   const searchRadius = district === "全區" ? 6000 : 4000;
 
-  if (onStatusUpdate) onStatusUpdate(false, `⚡ 啟動 30+ 多管道極速並行掃瞄 [${city} ${district}]...`);
+  // 1. 熔斷時間區分：預載模式放寬至 60 秒；手動生成模式給予 10 秒
+  const timeoutMs = isPreload ? 60000 : 10000;
 
-  // 構建 6 節點 x 5 主題 = 30 個並行 Fetch Tasks
-  const parallelTasks = [];
+  if (onStatusUpdate) {
+    const modeText = isPreload ? "深度靜默探測中 (不設限等待)..." : "12連線發射中 (10秒實時衝刺)...";
+    onStatusUpdate(false, `📡 正在對 [${city} ${district}] 發起全網連線，${modeText}`);
+  }
+
+  // 2. 構建 6 節點 x 2 請求 = 12 個並行通道
+  const tasks = [];
   LIVE_API_ENDPOINTS.forEach(endpoint => {
-    SUB_QUERY_TEMPLATES.forEach(tmpl => {
-      const subQueryBody = tmpl(searchRadius, center[0], center[1]);
-      parallelTasks.push(fetchLightweightQuery(endpoint, subQueryBody));
+    SUB_QUERIES.forEach(tmpl => {
+      tasks.push(fetchSubQuery(endpoint, tmpl(searchRadius, center[0], center[1]), timeoutMs));
     });
   });
 
-  // 發射 30+ 並行連線，收集所有成功返回的結果
-  const results = await Promise.allSettled(parallelTasks);
+  // 3. 12 通道發射，收集所有順利返回的實時地點
+  const results = await Promise.allSettled(tasks);
   let liveElements = [];
 
   results.forEach(res => {
@@ -92,14 +108,12 @@ window.fetchOSMData = async function(city, district, onStatusUpdate) {
 
   if (parsed.length > 0) {
     window.overpassCache[cacheKey] = parsed;
-    if (onStatusUpdate) onStatusUpdate(true, `📡 矩陣連線成功！獲得 [${city} ${district}] ${parsed.length} 筆實時點位`);
+    if (onStatusUpdate) onStatusUpdate(true, `📡 線上實時探索成功！獲得 [${city} ${district}] ${parsed.length} 筆最新點位`);
     return parsed;
   }
 
-  console.warn(`[30+ 管道併發失敗] 切換至在地備援資料庫...`);
-  const fallbackList = await window.loadCityJsonFallback(city);
-  if (onStatusUpdate) onStatusUpdate(true, `💾 已連接在地備援庫 (${fallbackList.length} 筆)`);
-  return fallbackList;
+  console.warn(`[實時 12 通道無資料或超時] 切換離線備援庫...`);
+  return [];
 };
 
 window.loadCityJsonFallback = async function(cityName) {
@@ -166,7 +180,7 @@ function parseOverpassElements(elements, city, district) {
       lat: el.lat,
       lng: el.lon,
       isLive: true,
-      desc: tags.description || tags.note || `實時線上獲取之在地真實${type}`
+      desc: tags.description || tags.note || `實時線上發現之在地真實${type}`
     });
   });
 
